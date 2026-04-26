@@ -27,9 +27,54 @@ from statsmodels.tsa.stattools import adfuller, coint
 
 REPO_ROOT = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("IMC_DATA_ROOT", str(REPO_ROOT / "data")))
-ROUND1_DATA_DIR = Path(os.environ.get("IMC_ROUND1_DATA_DIR", str(DATA_ROOT / "ROUND1")))
-ROUND2_DATA_DIR = Path(os.environ.get("IMC_ROUND2_DATA_DIR", str(DATA_ROOT / "ROUND2")))
-ROUND3_DATA_DIR = Path(os.environ.get("IMC_ROUND3_DATA_DIR", str(DATA_ROOT / "ROUND3")))
+
+
+def _has_round_price_csvs(path: Path) -> bool:
+    return path.exists() and any(path.glob("prices_round_*_day_*.csv"))
+
+
+def _resolve_round_dir(env_var: str, default_dir: Path, fallback_dirs: tuple[Path, ...]) -> Path:
+    env_value = os.environ.get(env_var)
+    if env_value:
+        return Path(env_value)
+    if _has_round_price_csvs(default_dir):
+        return default_dir
+    for candidate in fallback_dirs:
+        if _has_round_price_csvs(candidate):
+            return candidate
+    return default_dir
+
+
+_P4_BUNDLED_ROUND_FALLBACKS = {
+    "ROUND1": (
+        REPO_ROOT.parent / "imc-prosperity-4" / "backtester" / "prosperity3bt" / "resources" / "round1",
+        REPO_ROOT.parent / "imc-prosperity-4-fresh" / "backtester" / "prosperity3bt" / "resources" / "round1",
+    ),
+    "ROUND2": (
+        REPO_ROOT.parent / "imc-prosperity-4" / "backtester" / "prosperity3bt" / "resources" / "round2",
+        REPO_ROOT.parent / "imc-prosperity-4-fresh" / "backtester" / "prosperity3bt" / "resources" / "round2",
+    ),
+    "ROUND3": (
+        REPO_ROOT.parent / "imc-prosperity-4" / "backtester" / "prosperity3bt" / "resources" / "round3",
+        REPO_ROOT.parent / "imc-prosperity-4-fresh" / "backtester" / "prosperity3bt" / "resources" / "round3",
+    ),
+}
+
+ROUND1_DATA_DIR = _resolve_round_dir(
+    "IMC_ROUND1_DATA_DIR",
+    DATA_ROOT / "ROUND1",
+    _P4_BUNDLED_ROUND_FALLBACKS["ROUND1"],
+)
+ROUND2_DATA_DIR = _resolve_round_dir(
+    "IMC_ROUND2_DATA_DIR",
+    DATA_ROOT / "ROUND2",
+    _P4_BUNDLED_ROUND_FALLBACKS["ROUND2"],
+)
+ROUND3_DATA_DIR = _resolve_round_dir(
+    "IMC_ROUND3_DATA_DIR",
+    DATA_ROOT / "ROUND3",
+    _P4_BUNDLED_ROUND_FALLBACKS["ROUND3"],
+)
 DEFAULT_DATA_DIR = (
     ROUND3_DATA_DIR
     if ROUND3_DATA_DIR.exists()
