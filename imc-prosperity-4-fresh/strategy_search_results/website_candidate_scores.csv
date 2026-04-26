@@ -1,0 +1,47 @@
+timestamp,file,uploaded_name,final_pnl,first_pnl,points,note
+2026-04-18 04:18:51,cand_ret1_010.py,13-cand_ret1_010.py,8675.8671875,-247.5,500,reduce recent-move mean reversion
+2026-04-18 04:20:47,cand_ret1_000.py,14-cand_ret1_000.py,8717.875,-62.1015625,500,remove recent-move mean reversion
+2026-04-18 04:22:44,cand_ret5_004.py,15-cand_ret5_004.py,8835.8125,-7.64453125,500,weaker ret5 mean reversion
+2026-04-18 04:24:50,cand_ret5_012.py,16-cand_ret5_012.py,8784.3359375,-62.1015625,500,stronger ret5 mean reversion
+2026-04-18 04:26:46,cand_no_micro_depth.py,17-cand_no_micro_depth.py,8961.875,54.45703125,500,remove unstable micro/depth trend terms
+2026-04-18 04:29:43,cand_pressure_stronger.py,18-cand_pressure_stronger.py,8845.1875,-19.64453125,500,stronger top-level liquidity pressure
+2026-04-18 04:31:49,cand_offset_tighter.py,19-cand_offset_tighter.py,8888.46875,-205.04296875,500,quote slightly tighter
+2026-04-18 04:33:45,cand_qsize25.py,20-cand_qsize25.py,8843.875,-19.64453125,500,quote larger size
+2026-04-18 04:36:50,cand_no_micro_depth_pressure3.py,21-cand_no_micro_depth_pressure3.py,8898.875,-19.64453125,500,winner variant: weaker pressure
+2026-04-18 04:38:46,cand_no_micro_depth_pressure5.py,22-cand_no_micro_depth_pressure5.py,8832.8125,-19.64453125,500,winner variant: stronger pressure
+2026-04-18 04:40:43,cand_no_micro_depth_top05.py,23-cand_no_micro_depth_top05.py,9075.7333984375,-19.64453125,500,winner variant: weaker top imbalance
+2026-04-18 04:42:49,cand_no_micro_depth_top15.py,24-cand_no_micro_depth_top15.py,8640.1875,-19.64453125,500,winner variant: stronger top imbalance
+2026-04-18 04:44:45,cand_no_micro_depth_alpha_scale075.py,25-cand_no_micro_depth_alpha_scale075.py,8987.46875,-19.64453125,500,winner variant: lower total alpha scale
+2026-04-18 04:46:52,cand_no_micro_depth_alpha_scale125.py,26-cand_no_micro_depth_alpha_scale125.py,8578.53125,42.45703125,500,winner variant: higher total alpha scale
+2026-04-18 04:48:48,cand_no_micro_depth_ema005.py,27-cand_no_micro_depth_ema005.py,8854.28125,-19.64453125,500,winner variant: slower fair-value EMA
+2026-04-18 04:50:44,cand_no_micro_depth_ema015.py,28-cand_no_micro_depth_ema015.py,8716.75,-193.04296875,500,winner variant: faster fair-value EMA
+2026-04-18 04:52:48,cand_no_micro_depth_top00.py,29-cand_no_micro_depth_top00.py,8780.875,42.45703125,500,top grid: remove top imbalance entirely
+2026-04-18 04:54:45,cand_no_micro_depth_top025.py,30-cand_no_micro_depth_top025.py,8844.8125,-7.64453125,500,top grid: top imbalance 0.25
+2026-04-18 04:56:51,cand_no_micro_depth_top075.py,31-cand_no_micro_depth_top075.py,9033.93359375,-19.64453125,500,top grid: top imbalance 0.75
+2026-04-18 04:58:47,cand_no_micro_depth_top05_alpha075.py,32-cand_no_micro_depth_top05_alpha075.py,8913.8125,-19.64453125,500,top0.5 plus lower total alpha
+2026-04-18 05:01:43,cand_no_micro_depth_top05_alpha125.py,33-cand_no_micro_depth_top05_alpha125.py,8947.875,-205.04296875,500,top0.5 plus higher total alpha
+2026-04-18 05:04:50,cand_no_micro_depth_top05_ema005.py,34-cand_no_micro_depth_top05_ema005.py,8938.28125,-19.64453125,500,top0.5 plus slower EMA
+2026-04-18 05:06:46,cand_no_micro_depth_top05_ema015.py,35-cand_no_micro_depth_top05_ema015.py,8814.8125,-19.64453125,500,top0.5 plus faster EMA
+2026-04-18 05:09:46,cand_no_micro_depth_top05.py,36-cand_no_micro_depth_top05.py,8733.65625,-62.1015625,500,restore best active final candidate
+2026-04-18 05:12:51,mainbh_osmium_ret5_pressure_alpha.py,37-mainbh_osmium_ret5_pressure_alpha.py,8816.53125,-205.04296875,500,robust retest baseline locked A
+2026-04-18 05:13:07,cand_no_micro_depth_top05.py,36-cand_no_micro_depth_top05.py,8733.65625,-62.1015625,500,robust retest top05 A
+2026-04-18 05:17:51,rt_baseline_001.py,39-rt_baseline_001.py,8940.1875,-19.64453125,500,unique robustness baseline 001
+2026-04-18 05:19:47,rt_top05_001.py,40-rt_top05_001.py,8970.1328125,-19.64453125,500,unique robustness top05 001
+2026-04-18 05:21:43,rt_top075_001.py,41-rt_top075_001.py,8765,-19.64453125,500,unique robustness top075 001
+2026-04-18 05:23:32,rt_nomicro_001.py,42-rt_nomicro_001.py,8691.28125,-19.64453125,500,unique robustness no micro/depth 001
+2026-04-18 05:25:49,rt_baseline_002.py,43-rt_baseline_002.py,8832.46875,-19.64453125,500,unique robustness baseline 002
+2026-04-18 05:27:45,rt_top05_002.py,44-rt_top05_002.py,8932.8125,-19.64453125,500,unique robustness top05 002
+2026-04-18 05:29:51,rt_top075_002.py,45-rt_top075_002.py,8986.140625,-19.64453125,500,unique robustness top075 002
+2026-04-18 05:31:48,rt_nomicro_002.py,46-rt_nomicro_002.py,8914.0625,-19.64453125,500,unique robustness no micro/depth 002
+2026-04-18 05:34:48,main_final_round2_top05.py,47-main_final_round2_top05.py,8646.8125,-205.04296875,500,final active upload: top05 winner logic
+2026-04-18 10:53:57,s9700_one_sided.py,53-s9700_one_sided.py,8817.625,-205.04296875,500,structural: take favorable one-sided osmium liquidity (rescored existing upload)
+2026-04-18 10:56:54,s9700_wallmid_void_sign.py,54-s9700_wallmid_void_sign.py,8774.34375,-19.64453125,500,structural: void-skew wallmid sign alpha
+2026-04-18 10:58:50,s9700_wallmid_micro_sign.py,55-s9700_wallmid_micro_sign.py,8766.34375,42.45703125,500,structural: microprice sign alpha
+2026-04-18 11:00:46,s9700_gamma_wallmid.py,56-s9700_gamma_wallmid.py,8977.0625,-62.1015625,500,structural: inventory gamma target plus wallmid vote
+2026-04-18 11:02:53,s9700_wallmid_vote.py,57-s9700_wallmid_vote.py,8839.5,-19.64453125,500,structural: top/micro/void sign vote
+2026-04-18 11:04:49,s9700_pepper_sweep_one_sided.py,58-s9700_pepper_sweep_one_sided.py,8686.9375,-205.04296875,500,structural: one-sided osmium plus aggressive pepper entry
+2026-04-18 11:10:49,w9700_plain_mm_001.py,59-w9700_plain_mm_001.py,9000.46875,-19.64453125,500,existing family retest: pure MM plus pepper hold
+2026-04-18 11:12:45,w9700_pressure_size_001.py,60-w9700_pressure_size_001.py,8808.46875,-19.64453125,500,existing family retest: pressure size alpha
+2026-04-18 11:14:51,w9700_raw_alpha_001.py,61-w9700_raw_alpha_001.py,9037.53125,-62.1015625,500,existing family retest: raw alpha
+2026-04-19 20:02:56,web_pepper_line_mm_001.py,63-web_pepper_line_mm_001.py,9194.2333984375,-205.04296875,500,pepper 70 core buy-hold plus 10 linear-residual MM sleeve
+2026-04-19 20:58:54,web_pepper_line_mm_60_20_001.py,64-web_pepper_line_mm_60_20_001.py,8078.53125,-7.64453125,500,pepper 60 core buy-hold plus 20 linear-residual MM sleeve

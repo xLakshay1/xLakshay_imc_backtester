@@ -1,0 +1,165 @@
+
+  You can now view your Streamlit app in your browser.
+
+  URL: http://127.0.0.1:8501
+
+  For better performance, install the Watchdog module:
+
+  $ xcode-select --install
+  $ pip install watchdog
+            
+
+  You can now view your Streamlit app in your browser.
+
+  URL: http://127.0.0.1:8501
+
+  For better performance, install the Watchdog module:
+
+  $ xcode-select --install
+  $ pip install watchdog
+            
+2026-04-22 18:48:36.842 Uncaught app execution
+Traceback (most recent call last):
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 128, in exec_func_with_error_handling
+    result = func()
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5941, in <module>
+    main()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5067, in main
+    available_datasets = [
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5070, in <listcomp>
+    if discover_dataset_files(tuple(str(path) for path in folder_paths)).price_paths
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/caching/cache_utils.py", line 227, in __call__
+    return self._get_or_create_cached_value(args, kwargs, spinner_message)
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/caching/cache_utils.py", line 251, in _get_or_create_cached_value
+    cached_result = cache.read_result(value_key)
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/caching/cache_data_api.py", line 651, in read_result
+    entry = pickle.loads(pickled_entry)  # noqa: S301
+AttributeError: Can't get attribute 'DataFiles' on <module '__main__' from 'imc_round1_dashboard.py'>
+  Stopping...
+
+  You can now view your Streamlit app in your browser.
+
+  URL: http://127.0.0.1:8501
+
+  For better performance, install the Watchdog module:
+
+  $ xcode-select --install
+  $ pip install watchdog
+            
+2026-04-22 19:25:20.175 Port 8501 is already in use
+2026-04-23 01:35:21.532 Port 8501 is already in use
+2026-04-24 02:09:48.400 Port 8501 is already in use
+2026-04-24 06:03:28.997 Uncaught app execution
+Traceback (most recent call last):
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 128, in exec_func_with_error_handling
+    result = func()
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 7000, in <module>
+    main()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 6120, in main
+    render_volterra_tool_page()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5758, in render_volterra_tool_page
+    volterra_kernel_chart(kernel, horizon, steps, hurst, decay, custom_kernel_expression),
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5466, in volterra_kernel_chart
+    values = volterra_kernel_values(kernel, dt, int(max(2, steps)), hurst, decay, custom_kernel_expression)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5400, in volterra_kernel_values
+    return volterra_custom_kernel_values(expression, lags, hurst, decay)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5371, in volterra_custom_kernel_values
+    values = eval(expression, safe_globals, safe_locals)
+  File "<string>", line 1
+    u**(-0.4
+           ^
+SyntaxError: unexpected EOF while parsing
+2026-04-24 06:04:17.515 Uncaught app execution
+Traceback (most recent call last):
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 128, in exec_func_with_error_handling
+    result = func()
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 7000, in <module>
+    main()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 6120, in main
+    render_volterra_tool_page()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5758, in render_volterra_tool_page
+    volterra_kernel_chart(kernel, horizon, steps, hurst, decay, custom_kernel_expression),
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5466, in volterra_kernel_chart
+    values = volterra_kernel_values(kernel, dt, int(max(2, steps)), hurst, decay, custom_kernel_expression)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5400, in volterra_kernel_values
+    return volterra_custom_kernel_values(expression, lags, hurst, decay)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5371, in volterra_custom_kernel_values
+    values = eval(expression, safe_globals, safe_locals)
+  File "<string>", line 1
+    u**(-0.9
+           ^
+SyntaxError: unexpected EOF while parsing
+2026-04-24 06:04:20.729 Uncaught app execution
+Traceback (most recent call last):
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 128, in exec_func_with_error_handling
+    result = func()
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 7000, in <module>
+    main()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 6120, in main
+    render_volterra_tool_page()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5758, in render_volterra_tool_page
+    volterra_kernel_chart(kernel, horizon, steps, hurst, decay, custom_kernel_expression),
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5466, in volterra_kernel_chart
+    values = volterra_kernel_values(kernel, dt, int(max(2, steps)), hurst, decay, custom_kernel_expression)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5400, in volterra_kernel_values
+    return volterra_custom_kernel_values(expression, lags, hurst, decay)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5371, in volterra_custom_kernel_values
+    values = eval(expression, safe_globals, safe_locals)
+  File "<string>", line 1
+    u**(-0.90
+            ^
+SyntaxError: unexpected EOF while parsing
+/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/pandas/core/nanops.py:1016: RuntimeWarning: overflow encountered in square
+  sqr = _ensure_numeric((avg - values) ** 2)
+2026-04-24 06:05:38.381 Uncaught app execution
+Traceback (most recent call last):
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 128, in exec_func_with_error_handling
+    result = func()
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 7000, in <module>
+    main()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 6120, in main
+    render_volterra_tool_page()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5758, in render_volterra_tool_page
+    volterra_kernel_chart(kernel, horizon, steps, hurst, decay, custom_kernel_expression),
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5466, in volterra_kernel_chart
+    values = volterra_kernel_values(kernel, dt, int(max(2, steps)), hurst, decay, custom_kernel_expression)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5400, in volterra_kernel_values
+    return volterra_custom_kernel_values(expression, lags, hurst, decay)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5371, in volterra_custom_kernel_values
+    values = eval(expression, safe_globals, safe_locals)
+  File "<string>", line 1
+    u**(-1.02\3)
+               ^
+SyntaxError: unexpected character after line continuation character
+2026-04-24 06:06:50.647 Uncaught app execution
+Traceback (most recent call last):
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 128, in exec_func_with_error_handling
+    result = func()
+  File "/Users/lakshaykumar/Library/Python/3.9/lib/python/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 669, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 7000, in <module>
+    main()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 6120, in main
+    render_volterra_tool_page()
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5758, in render_volterra_tool_page
+    volterra_kernel_chart(kernel, horizon, steps, hurst, decay, custom_kernel_expression),
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5466, in volterra_kernel_chart
+    values = volterra_kernel_values(kernel, dt, int(max(2, steps)), hurst, decay, custom_kernel_expression)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5400, in volterra_kernel_values
+    return volterra_custom_kernel_values(expression, lags, hurst, decay)
+  File "/Users/lakshaykumar/Documents/Playground/imc_round1_dashboard.py", line 5371, in volterra_custom_kernel_values
+    values = eval(expression, safe_globals, safe_locals)
+  File "<string>", line 1
+    u**(-1.032
+             ^
+SyntaxError: unexpected EOF while parsing
