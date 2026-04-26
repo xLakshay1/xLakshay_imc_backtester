@@ -8,6 +8,7 @@ import itertools
 import io
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -24,9 +25,11 @@ import streamlit as st
 from statsmodels.tsa.stattools import adfuller, coint
 
 
-ROUND1_DATA_DIR = Path("/Users/lakshaykumar/Downloads/ROUND1")
-ROUND2_DATA_DIR = Path("/Users/lakshaykumar/Downloads/ROUND2")
-ROUND3_DATA_DIR = Path("/Users/lakshaykumar/Downloads/ROUND3")
+REPO_ROOT = Path(__file__).resolve().parent
+DATA_ROOT = Path(os.environ.get("IMC_DATA_ROOT", str(REPO_ROOT / "data")))
+ROUND1_DATA_DIR = Path(os.environ.get("IMC_ROUND1_DATA_DIR", str(DATA_ROOT / "ROUND1")))
+ROUND2_DATA_DIR = Path(os.environ.get("IMC_ROUND2_DATA_DIR", str(DATA_ROOT / "ROUND2")))
+ROUND3_DATA_DIR = Path(os.environ.get("IMC_ROUND3_DATA_DIR", str(DATA_ROOT / "ROUND3")))
 DEFAULT_DATA_DIR = (
     ROUND3_DATA_DIR
     if ROUND3_DATA_DIR.exists()
@@ -41,7 +44,7 @@ DATASET_DIRS = {
     "Rounds 1 + 2": (ROUND1_DATA_DIR, ROUND2_DATA_DIR),
     "Rounds 1 + 2 + 3": (ROUND1_DATA_DIR, ROUND2_DATA_DIR, ROUND3_DATA_DIR),
 }
-DEFAULT_STRATEGY_ROOT = Path("/Users/lakshaykumar/Documents/Playground/imc-prosperity-4-fresh")
+DEFAULT_STRATEGY_ROOT = Path(os.environ.get("IMC_STRATEGY_ROOT", str(REPO_ROOT)))
 SUBMISSION_HISTORY_DIR = DEFAULT_STRATEGY_ROOT / "dashboard_submission_history"
 SUBMISSION_HISTORY_FILE = SUBMISSION_HISTORY_DIR / "history.json"
 SUBMISSION_HISTORY_CODE_DIR = SUBMISSION_HISTORY_DIR / "code_snapshots"
@@ -74,12 +77,18 @@ ACTUAL_R2_SPEED_COUNTS = [
 ]
 
 P3_RESOURCES_DIR = Path(
-    "/Users/lakshaykumar/Documents/Playground/imc-prosperity-4-fresh/backtester/prosperity3bt/resources"
+    os.environ.get(
+        "IMC_P3_RESOURCES_DIR",
+        str(REPO_ROOT / "backtester" / "prosperity3bt" / "resources"),
+    )
 )
 P3_ROUND3_DATA_DIR = P3_RESOURCES_DIR / "round3"
 P3_R3_UNDERLYING = "VOLCANIC_ROCK"
 P3_R3_HUMAN_DISTRIBUTION_IMAGE = Path(
-    "/var/folders/lw/r9ybsks11_q27zk6r1w5fts80000gn/T/TemporaryItems/NSIRD_screencaptureui_C36Eiv/Screenshot 2026-04-25 at 12.11.14 PM.png"
+    os.environ.get(
+        "IMC_P3_R3_HUMAN_DISTRIBUTION_IMAGE",
+        str(REPO_ROOT / "assets" / "p3_r3_human_distribution.png"),
+    )
 )
 P3_R3_OPTION_STRIKES = (9500, 9750, 10000, 10250, 10500)
 P3_R3_OPTION_PRODUCTS = tuple(

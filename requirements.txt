@@ -3,4 +3,10 @@ pandas
 numpy
 plotly
 scipy
+statsmodels
 openpyxl
+jsonpickle
+ipython
+tqdm
+orjson
+typer

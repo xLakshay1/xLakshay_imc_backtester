@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+streamlit_dashboard.log
+dashboard_submission_history/
+data/ROUND1/*
+data/ROUND2/*
+data/ROUND3/*
+!data/ROUND1/.gitkeep
+!data/ROUND2/.gitkeep
+!data/ROUND3/.gitkeep
+assets/p3_r3_human_distribution.png

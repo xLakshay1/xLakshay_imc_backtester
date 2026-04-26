@@ -1,3 +1,0 @@
-day,signal_start_timestamp,estimated_trend_start_timestamp,signal_end_timestamp,peak_timestamp,reversion_timestamp,start_mid,peak_mid,end_mid,pre_mean,rise_to_peak,duration_to_peak_ticks,duration_to_reversion_ticks,max_rolling_slope,max_tstat,threshold_slope,window,slope_z,return_min,tstat_min,min_run
--2,575400,564000,579700,575400,580900,9992.0,10003.5,10000.0,9992.345,11.5,99,151,0.0991989198919892,22.661388244645774,0.07691630480946741,100,2.25,6.0,3.0,20
-0,908100,897400,914100,913400,940300,9999.0,10016.0,10010.5,9998.90375,17.0,150,399,0.10766276627662766,19.16583717221053,0.0783660917293391,100,2.25,6.0,3.0,20
