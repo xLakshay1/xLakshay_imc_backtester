@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="/Users/lakshaykumar/Documents/Playground"
 SESSION="imc_round_dashboard"
 LOG="$ROOT/streamlit_dashboard.log"
 APP="$ROOT/imc_round1_dashboard.py"
