@@ -1,6 +1,7 @@
-from typing import Any
+from typing import Any, Dict, Optional
 import json
 import math
+
 from datamodel import (
     Listing,
     Observation,
@@ -24,7 +25,7 @@ class Logger:
     def flush(
         self,
         state: TradingState,
-        orders: dict[Symbol, list[Order]],
+        orders: Dict[Symbol, list[Order]],
         conversions: int,
         trader_data: str,
     ) -> None:
@@ -40,7 +41,7 @@ class Logger:
             )
         )
 
-        max_item_length = (self.max_log_length - base_length) // 3
+        max_item_length = max(0, (self.max_log_length - base_length) // 3)
 
         print(
             self.to_json(
@@ -70,21 +71,21 @@ class Logger:
             self.compress_observations(state.observations),
         ]
 
-    def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
+    def compress_listings(self, listings: Dict[Symbol, Listing]) -> list[list[Any]]:
         compressed = []
         for listing in listings.values():
             compressed.append([listing.symbol, listing.product, listing.denomination])
         return compressed
 
     def compress_order_depths(
-        self, order_depths: dict[Symbol, OrderDepth]
-    ) -> dict[Symbol, list[Any]]:
+        self, order_depths: Dict[Symbol, OrderDepth]
+    ) -> Dict[Symbol, list[Any]]:
         compressed = {}
         for symbol, order_depth in order_depths.items():
             compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
         return compressed
 
-    def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
+    def compress_trades(self, trades: Dict[Symbol, list[Trade]]) -> list[list[Any]]:
         compressed = []
         for arr in trades.values():
             for trade in arr:
@@ -114,7 +115,7 @@ class Logger:
             ]
         return [observations.plainValueObservations, conversion_observations]
 
-    def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
+    def compress_orders(self, orders: Dict[Symbol, list[Order]]) -> list[list[Any]]:
         compressed = []
         for arr in orders.values():
             for order in arr:
@@ -125,6 +126,8 @@ class Logger:
         return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
 
     def truncate(self, value: str, max_length: int) -> str:
+        if max_length <= 0:
+            return ""
         if len(value) <= max_length:
             return value
         return value[: max_length - 3] + "..."
@@ -135,314 +138,550 @@ logger = Logger()
 
 class Trader:
     def __init__(self):
-        self.limits = {
-            "EMERALDS": 80,
-            "TOMATOES": 80,
+        self.hydro = {
+            "product": "HYDROGEL_PACK",
+            "limit": 200,
+            "initial_day_mean": 9991.0,
+            "ret_weight": 0.18,
+            "total_imb_weight": 1.30,
+            "inventory_skew": 0.80,
+            "base_quote_size": 16,
+            "depth_p25": 70.0,
+            "depth_p75": 80.0,
+            "early_ema_alpha": 0.05,
+            "late_ema_alpha": 0.16,
+            "early_take_mult": 0.80,
+            "late_take_mult": 0.35,
+            "early_passive_mult": 0.65,
+            "late_passive_mult": 0.28,
+        }
+        self.velvet = {
+            "product": "VELVETFRUIT_EXTRACT",
+            "limit": 200,
+            "initial_day_mean": 5266.0,
+            "day_shift": 20.0,
+            "ret_weight": 0.30,
+            "total_imb_weight": 1.00,
+            "l1_imb_weight": 0.85,
+            "inventory_skew": 0.85,
+            "base_quote_size": 32,
+            "depth_p25": 110.0,
+            "depth_p75": 132.0,
+        }
+        self.options = {
+            "underlying": "VELVETFRUIT_EXTRACT",
+            "products": [
+                "VEV_4000",
+                "VEV_4500",
+                "VEV_5000",
+                "VEV_5100",
+                "VEV_5200",
+                "VEV_5300",
+                "VEV_5400",
+                "VEV_5500",
+                "VEV_6000",
+                "VEV_6500",
+            ],
+            "limit": 300,
+            "initial_vv_mean": 5266.0,
+            "day_shift": 20.0,
+            "ret_weight": 0.18,
+            "book_weight": 0.75,
+            "l1_weight": 0.30,
+            "inventory_skew": 0.02,
+            "base_quote_size": 10,
+            "take_size": 18,
+            "depth_min": 8.0,
         }
 
-        self.orders: dict[Symbol, list[Order]] = {}
+        self.orders: Dict[Symbol, list[Order]] = {}
+        self.buy_reserved: Dict[Symbol, int] = {}
+        self.sell_reserved: Dict[Symbol, int] = {}
         self.conversions = 0
-        self.traderData = "SAMPLE"
+        self.traderData = "R3_MAIN_HYDRO_VELVET_ALL_OPTIONS_V1"
 
-        # EMERALDS state
-        self.emeralds_position = 0
-        self.emeralds_buy_orders = 0
-        self.emeralds_sell_orders = 0
+    def parse_memory(self, trader_data: str) -> Dict[str, Any]:
+        memory = {
+            "hydro": {
+                "prev_day_anchor": self.hydro["initial_day_mean"],
+                "day_sum": 0.0,
+                "day_count": 0,
+                "last_timestamp": None,
+                "ema": self.hydro["initial_day_mean"],
+                "prev_mid": None,
+            },
+            "velvet": {
+                "anchor": self.velvet["initial_day_mean"],
+                "day_sum": 0.0,
+                "day_count": 0,
+                "prev_mid": None,
+                "last_timestamp": None,
+            },
+            "options": {
+                "vv_anchor": self.options["initial_vv_mean"],
+                "day_sum": 0.0,
+                "day_count": 0,
+                "last_timestamp": None,
+                "prev_vv_mid": None,
+            },
+        }
+        if not trader_data:
+            return memory
+        try:
+            raw = json.loads(trader_data)
+        except Exception:
+            return memory
 
-        # TOMATOES state
-        self.tomatoes_position = 0
-        self.tomatoes_buy_orders = 0
-        self.tomatoes_sell_orders = 0
-
-    def send_sell_order(self, product: str, price: int, amount: int, msg=None):
-        if amount < 0:
-            self.orders[product].append(Order(product, int(price), amount))
-            if msg is not None:
-                logger.print(msg)
-
-    def send_buy_order(self, product: str, price: int, amount: int, msg=None):
-        if amount > 0:
-            self.orders[product].append(Order(product, int(price), amount))
-            if msg is not None:
-                logger.print(msg)
-
-    def get_product_pos(self, state: TradingState, product: str) -> int:
-        return state.position.get(product, 0)
-
-    def search_buys(
-        self, state: TradingState, product: str, acceptable_price: float, depth: int = 1
-    ):
-        """
-        Take asks that are below our acceptable price.
-        """
-        order_depth = state.order_depths[product]
-        if len(order_depth.sell_orders) == 0:
-            return
-
-        orders = list(order_depth.sell_orders.items())
-        for ask, amount in orders[: min(len(orders), depth)]:
-            pos = self.get_product_pos(state, product)
-
-            should_buy = (
-                int(ask) < acceptable_price
-                or (
-                    abs(ask - acceptable_price) < 1
-                    and pos < 0
-                    and abs(pos - amount) < abs(pos)
-                )
-            )
-
-            if not should_buy:
-                continue
-
-            if product == "EMERALDS":
-                size = min(
-                    self.limits["EMERALDS"]
-                    - self.emeralds_position
-                    - self.emeralds_buy_orders,
-                    -amount,
-                )
-                if size > 0:
-                    self.emeralds_buy_orders += size
-                    self.send_buy_order(
-                        product, ask, size, msg=f"TRADE BUY {size} x {product} @ {ask}"
-                    )
-
-            elif product == "TOMATOES":
-                size = min(
-                    self.limits["TOMATOES"]
-                    - self.tomatoes_position
-                    - self.tomatoes_buy_orders,
-                    -amount,
-                )
-                if size > 0:
-                    self.tomatoes_buy_orders += size
-                    self.send_buy_order(
-                        product, ask, size, msg=f"TRADE BUY {size} x {product} @ {ask}"
-                    )
-
-    def search_sells(
-        self, state: TradingState, product: str, acceptable_price: float, depth: int = 1
-    ):
-        """
-        Take bids that are above our acceptable price.
-        """
-        order_depth = state.order_depths[product]
-        if len(order_depth.buy_orders) == 0:
-            return
-
-        orders = list(order_depth.buy_orders.items())
-        for bid, amount in orders[: min(len(orders), depth)]:
-            pos = self.get_product_pos(state, product)
-
-            should_sell = (
-                int(bid) > acceptable_price
-                or (
-                    abs(bid - acceptable_price) < 1
-                    and pos > 0
-                    and abs(pos - amount) < abs(pos)
-                )
-            )
-
-            if not should_sell:
-                continue
-
-            if product == "EMERALDS":
-                size = min(
-                    self.emeralds_position
-                    + self.limits["EMERALDS"]
-                    - self.emeralds_sell_orders,
-                    amount,
-                )
-                if size > 0:
-                    self.emeralds_sell_orders += size
-                    self.send_sell_order(
-                        product,
-                        bid,
-                        -size,
-                        msg=f"TRADE SELL {-size} x {product} @ {bid}",
-                    )
-
-            elif product == "TOMATOES":
-                size = min(
-                    self.tomatoes_position
-                    + self.limits["TOMATOES"]
-                    - self.tomatoes_sell_orders,
-                    amount,
-                )
-                if size > 0:
-                    self.tomatoes_sell_orders += size
-                    self.send_sell_order(
-                        product,
-                        bid,
-                        -size,
-                        msg=f"TRADE SELL {-size} x {product} @ {bid}",
-                    )
-
-    def get_bid(self, state: TradingState, product: str, price: float):
-        """
-        Best bid strictly below a reference price.
-        """
-        order_depth = state.order_depths[product]
-        if len(order_depth.buy_orders) == 0:
-            return None
-
-        orders = list(order_depth.buy_orders.items())
-        for bid, _ in orders:
-            if bid < price:
-                return bid
-        return None
-
-    def get_ask(self, state: TradingState, product: str, price: float):
-        """
-        Best ask strictly above a reference price.
-        """
-        order_depth = state.order_depths[product]
-        if len(order_depth.sell_orders) == 0:
-            return None
-
-        orders = list(order_depth.sell_orders.items())
-        for ask, _ in orders:
-            if ask > price:
-                return ask
-        return None
-
-    def trade_emeralds(self, state: TradingState):
-        """
-        EMERALDS: fixed fair value around 10000, so simple MM + taking is strong.
-        """
-        FAIR_VALUE = 10000
-
-        self.search_buys(state, "EMERALDS", FAIR_VALUE, depth=3)
-        self.search_sells(state, "EMERALDS", FAIR_VALUE, depth=3)
-
-        best_ask = self.get_ask(state, "EMERALDS", FAIR_VALUE)
-        best_bid = self.get_bid(state, "EMERALDS", FAIR_VALUE)
-
-        # default quote
-        buy_price = 9996
-        sell_price = 10004
-
-        # improve if another MM already exists
-        if best_ask is not None and best_bid is not None:
-            sell_price = best_ask - 1
-            buy_price = best_bid + 1
-
-        max_buy = (
-            self.limits["EMERALDS"]
-            - self.emeralds_position
-            - self.emeralds_buy_orders
+        hydro_raw = raw.get("hydro", {})
+        velvet_raw = raw.get("velvet", {})
+        options_raw = raw.get("options", {})
+        memory["hydro"]["prev_day_anchor"] = float(
+            hydro_raw.get("prev_day_anchor", self.hydro["initial_day_mean"])
         )
-        max_sell = (
-            self.emeralds_position
-            + self.limits["EMERALDS"]
-            - self.emeralds_sell_orders
+        memory["hydro"]["day_sum"] = float(hydro_raw.get("day_sum", 0.0))
+        memory["hydro"]["day_count"] = int(hydro_raw.get("day_count", 0))
+        memory["hydro"]["last_timestamp"] = hydro_raw.get("last_timestamp")
+        memory["hydro"]["ema"] = float(
+            hydro_raw.get("ema", memory["hydro"]["prev_day_anchor"])
         )
+        memory["hydro"]["prev_mid"] = hydro_raw.get("prev_mid")
 
-        max_buy = max(0, max_buy)
-        max_sell = max(0, max_sell)
-
-        self.send_sell_order(
-            "EMERALDS",
-            sell_price,
-            -max_sell,
-            msg=f"EMERALDS: MARKET MADE SELL {max_sell} @ {sell_price}",
+        memory["velvet"]["anchor"] = float(
+            velvet_raw.get("anchor", self.velvet["initial_day_mean"])
         )
-        self.send_buy_order(
-            "EMERALDS",
-            buy_price,
-            max_buy,
-            msg=f"EMERALDS: MARKET MADE BUY {max_buy} @ {buy_price}",
+        memory["velvet"]["day_sum"] = float(velvet_raw.get("day_sum", 0.0))
+        memory["velvet"]["day_count"] = int(velvet_raw.get("day_count", 0))
+        memory["velvet"]["prev_mid"] = velvet_raw.get("prev_mid")
+        memory["velvet"]["last_timestamp"] = velvet_raw.get("last_timestamp")
+        memory["options"]["vv_anchor"] = float(
+            options_raw.get("vv_anchor", self.options["initial_vv_mean"])
         )
+        memory["options"]["day_sum"] = float(options_raw.get("day_sum", 0.0))
+        memory["options"]["day_count"] = int(options_raw.get("day_count", 0))
+        memory["options"]["last_timestamp"] = options_raw.get("last_timestamp")
+        memory["options"]["prev_vv_mid"] = options_raw.get("prev_vv_mid")
+        return memory
 
-    def trade_tomatoes(self, state: TradingState):
-        """
-        TOMATOES: use midpoint-style fair value from current book, then take good prices
-        and provide liquidity around fair value.
-        """
-        low = -self.limits["TOMATOES"]
-        high = self.limits["TOMATOES"]
+    def encode_memory(self, memory: Dict[str, Any]) -> str:
+        return json.dumps(memory, separators=(",", ":"))
 
-        position = state.position.get("TOMATOES", 0)
-        order_book = state.order_depths["TOMATOES"]
-        sell_orders = order_book.sell_orders
-        buy_orders = order_book.buy_orders
-
-        if len(sell_orders) == 0 or len(buy_orders) == 0:
-            return
-
-        # preserving the structure of your uploaded template:
-        # it used the "last" entry from each side as the fair proxy
-        ask, _ = list(sell_orders.items())[-1]
-        bid, _ = list(buy_orders.items())[-1]
-
-        decimal_fair_price = (ask + bid) / 2
-        logger.print(f"TOMATOES FAIR PRICE: {decimal_fair_price}")
-
-        self.search_buys(state, "TOMATOES", decimal_fair_price, depth=3)
-        self.search_sells(state, "TOMATOES", decimal_fair_price, depth=3)
-
-        best_ask = self.get_ask(state, "TOMATOES", decimal_fair_price)
-        best_bid = self.get_bid(state, "TOMATOES", decimal_fair_price)
-
-        buy_price = math.floor(decimal_fair_price) - 2
-        sell_price = math.ceil(decimal_fair_price) + 2
-
-        if best_ask is not None and best_bid is not None:
-            if best_ask - 1 > decimal_fair_price:
-                sell_price = best_ask - 1
-            if best_bid + 1 < decimal_fair_price:
-                buy_price = best_bid + 1
-
-        max_buy = high - position - self.tomatoes_buy_orders
-        max_sell = position - low - self.tomatoes_sell_orders
-
-        max_buy = max(0, max_buy)
-        max_sell = max(0, max_sell)
-
-        pos = self.get_product_pos(state, "TOMATOES")
-
-        # if long and buy price is basically fair, avoid adding more
-        if not (pos > 0 and float(buy_price) == decimal_fair_price):
-            self.send_buy_order(
-                "TOMATOES",
-                buy_price,
-                max_buy,
-                msg=f"TOMATOES: MARKET MADE BUY {max_buy} @ {buy_price}",
-            )
-
-        # if short and sell price is basically fair, avoid adding more
-        if not (pos < 0 and float(sell_price) == decimal_fair_price):
-            self.send_sell_order(
-                "TOMATOES",
-                sell_price,
-                -max_sell,
-                msg=f"TOMATOES: MARKET MADE SELL {max_sell} @ {sell_price}",
-            )
-
-    def reset_orders(self, state: TradingState):
-        self.orders = {}
+    def reset_orders(self, state: TradingState) -> None:
+        self.orders = {product: [] for product in state.order_depths}
+        self.buy_reserved = {product: 0 for product in state.order_depths}
+        self.sell_reserved = {product: 0 for product in state.order_depths}
         self.conversions = 0
 
-        self.emeralds_position = self.get_product_pos(state, "EMERALDS")
-        self.emeralds_buy_orders = 0
-        self.emeralds_sell_orders = 0
+    def get_position(self, state: TradingState, product: str) -> int:
+        return int(state.position.get(product, 0))
 
-        self.tomatoes_position = self.get_product_pos(state, "TOMATOES")
-        self.tomatoes_buy_orders = 0
-        self.tomatoes_sell_orders = 0
+    def remaining_buy(self, state: TradingState, product: str, limit: int) -> int:
+        return max(0, limit - self.get_position(state, product) - self.buy_reserved.get(product, 0))
 
-        for product in state.order_depths:
-            self.orders[product] = []
+    def remaining_sell(self, state: TradingState, product: str, limit: int) -> int:
+        return max(0, limit + self.get_position(state, product) - self.sell_reserved.get(product, 0))
+
+    def place_buy(
+        self, state: TradingState, product: str, limit: int, price: int, quantity: int, msg: str
+    ) -> None:
+        qty = min(max(0, int(quantity)), self.remaining_buy(state, product, limit))
+        if qty <= 0:
+            return
+        self.orders[product].append(Order(product, int(price), qty))
+        self.buy_reserved[product] += qty
+        logger.print(msg)
+
+    def place_sell(
+        self, state: TradingState, product: str, limit: int, price: int, quantity: int, msg: str
+    ) -> None:
+        qty = min(max(0, int(quantity)), self.remaining_sell(state, product, limit))
+        if qty <= 0:
+            return
+        self.orders[product].append(Order(product, int(price), -qty))
+        self.sell_reserved[product] += qty
+        logger.print(msg)
+
+    def ordered_bid_levels(self, order_depth: OrderDepth) -> list[tuple[int, int]]:
+        return sorted(order_depth.buy_orders.items(), reverse=True)
+
+    def ordered_ask_levels(self, order_depth: OrderDepth) -> list[tuple[int, int]]:
+        return sorted(order_depth.sell_orders.items())
+
+    def best_bid_ask(self, order_depth: OrderDepth) -> tuple[Optional[int], Optional[int]]:
+        best_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders else None
+        best_ask = min(order_depth.sell_orders.keys()) if order_depth.sell_orders else None
+        return best_bid, best_ask
+
+    def wall_mid(self, order_depth: OrderDepth) -> Optional[float]:
+        best_bid, best_ask = self.best_bid_ask(order_depth)
+        if best_bid is not None and best_ask is not None:
+            return 0.5 * (best_bid + best_ask)
+        if best_ask is not None:
+            return best_ask - 0.5
+        if best_bid is not None:
+            return best_bid + 0.5
+        return None
+
+    def book_signal(self, order_depth: OrderDepth, fallback_spread: float) -> Dict[str, Any]:
+        best_bid, best_ask = self.best_bid_ask(order_depth)
+        mid = self.wall_mid(order_depth)
+        spread = (
+            float(best_ask - best_bid)
+            if best_bid is not None and best_ask is not None
+            else fallback_spread
+        )
+        bid_levels = self.ordered_bid_levels(order_depth)
+        ask_levels = self.ordered_ask_levels(order_depth)
+        bid_total = 0
+        ask_total = 0
+        for level in range(1, 4):
+            bid_total += abs(int(bid_levels[level - 1][1])) if len(bid_levels) >= level else 0
+            ask_total += abs(int(ask_levels[level - 1][1])) if len(ask_levels) >= level else 0
+
+        best_bid_volume = abs(int(order_depth.buy_orders.get(best_bid, 0))) if best_bid is not None else 0
+        best_ask_volume = abs(int(order_depth.sell_orders.get(best_ask, 0))) if best_ask is not None else 0
+        depth_total = bid_total + ask_total
+        l1_total = best_bid_volume + best_ask_volume
+        imbalance = (bid_total - ask_total) / depth_total if depth_total > 0 else 0.0
+        l1_imbalance = (best_bid_volume - best_ask_volume) / l1_total if l1_total > 0 else 0.0
+        return {
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "mid": mid,
+            "spread": spread,
+            "imbalance": imbalance,
+            "l1_imbalance": l1_imbalance,
+            "depth_total": depth_total,
+            "best_bid_volume": best_bid_volume,
+            "best_ask_volume": best_ask_volume,
+        }
+
+    def regime_scale(self, depth_total: float, depth_p25: float, depth_p75: float, high: float = 1.20) -> float:
+        if depth_total >= depth_p75:
+            return high
+        if depth_total <= depth_p25:
+            return 0.80
+        fraction = (depth_total - depth_p25) / (depth_p75 - depth_p25)
+        return 0.80 + (high - 0.80) * fraction
+
+    def intraday_progress(self, timestamp: int) -> float:
+        return min(1.0, max(0.0, float(timestamp) / 1_000_000.0))
+
+    def strike_from_symbol(self, product: str) -> float:
+        return float(product.split("_")[1])
+
+    def option_spread_cap(self, market_mid: float) -> float:
+        return max(4.0, 0.08 * max(market_mid, 1.0))
+
+    def update_hydro_day_state(self, memory: Dict[str, Any], timestamp: int, mid: float) -> None:
+        last_timestamp = memory["last_timestamp"]
+        if last_timestamp is not None and int(timestamp) < int(last_timestamp):
+            if int(memory["day_count"]) > 0:
+                memory["prev_day_anchor"] = float(memory["day_sum"]) / float(memory["day_count"])
+            memory["day_sum"] = 0.0
+            memory["day_count"] = 0
+            memory["prev_mid"] = None
+            memory["ema"] = float(memory["prev_day_anchor"])
+        memory["day_sum"] = float(memory["day_sum"]) + mid
+        memory["day_count"] = int(memory["day_count"]) + 1
+        memory["last_timestamp"] = int(timestamp)
+
+    def update_velvet_day_anchor(self, memory: Dict[str, Any], timestamp: int, mid: float) -> None:
+        last_timestamp = memory["last_timestamp"]
+        if last_timestamp is not None and int(timestamp) < int(last_timestamp):
+            if int(memory["day_count"]) > 0:
+                memory["anchor"] = float(memory["day_sum"]) / float(memory["day_count"]) + float(self.velvet["day_shift"])
+            memory["day_sum"] = 0.0
+            memory["day_count"] = 0
+            memory["prev_mid"] = None
+        memory["day_sum"] = float(memory["day_sum"]) + mid
+        memory["day_count"] = int(memory["day_count"]) + 1
+        memory["last_timestamp"] = int(timestamp)
+
+    def update_options_day_anchor(self, memory: Dict[str, Any], timestamp: int, vv_mid: float) -> None:
+        last_timestamp = memory["last_timestamp"]
+        if last_timestamp is not None and int(timestamp) < int(last_timestamp):
+            if int(memory["day_count"]) > 0:
+                memory["vv_anchor"] = float(memory["day_sum"]) / float(memory["day_count"]) + float(self.options["day_shift"])
+            memory["day_sum"] = 0.0
+            memory["day_count"] = 0
+            memory["prev_vv_mid"] = None
+        memory["day_sum"] = float(memory["day_sum"]) + vv_mid
+        memory["day_count"] = int(memory["day_count"]) + 1
+        memory["last_timestamp"] = int(timestamp)
+
+    def trade_hydrogel(self, state: TradingState, memory: Dict[str, Any]) -> None:
+        product = str(self.hydro["product"])
+        limit = int(self.hydro["limit"])
+        if product not in state.order_depths:
+            return
+
+        signal = self.book_signal(state.order_depths[product], 16.0)
+        mid = signal["mid"]
+        best_bid = signal["best_bid"]
+        best_ask = signal["best_ask"]
+        if mid is None or best_bid is None or best_ask is None:
+            return
+
+        self.update_hydro_day_state(memory, state.timestamp, mid)
+        progress = self.intraday_progress(state.timestamp)
+        effective_ema_alpha = (1.0 - progress) * float(self.hydro["early_ema_alpha"]) + progress * float(self.hydro["late_ema_alpha"])
+
+        prev_mid = memory["prev_mid"]
+        recent_move = 0.0 if prev_mid is None else mid - float(prev_mid)
+        memory["prev_mid"] = mid
+
+        previous_ema = float(memory["ema"])
+        ema = effective_ema_alpha * mid + (1.0 - effective_ema_alpha) * previous_ema
+        memory["ema"] = ema
+
+        depth_total = float(signal["depth_total"])
+        regime_scale = self.regime_scale(
+            depth_total, float(self.hydro["depth_p25"]), float(self.hydro["depth_p75"]), 1.25
+        )
+        thick_book = depth_total >= float(self.hydro["depth_p75"])
+        anchor = ema if thick_book else float(memory["prev_day_anchor"])
+
+        fair = anchor
+        if thick_book:
+            fair -= regime_scale * float(self.hydro["ret_weight"]) * recent_move
+        fair += regime_scale * float(signal["spread"]) * (
+            -float(self.hydro["total_imb_weight"]) * float(signal["imbalance"])
+        )
+
+        position = self.get_position(state, product)
+        position_ratio = position / float(limit)
+        quote_fair = fair - float(self.hydro["inventory_skew"]) * position_ratio * float(signal["spread"])
+
+        take_mult = (1.0 - progress) * float(self.hydro["early_take_mult"]) + progress * float(self.hydro["late_take_mult"])
+        passive_mult = (1.0 - progress) * float(self.hydro["early_passive_mult"]) + progress * float(self.hydro["late_passive_mult"])
+        take_threshold = max(2.0, take_mult * float(signal["spread"]) / max(0.90, regime_scale))
+        passive_offset = max(2.0, passive_mult * float(signal["spread"]) / max(0.90, regime_scale))
+
+        take_size = max(6, int(round((12 if thick_book else 8) * regime_scale)))
+        quote_size = max(6, int(round(float(self.hydro["base_quote_size"]) * regime_scale)))
+        if abs(position) > 0.60 * limit:
+            quote_size = max(4, quote_size // 2)
+
+        if best_ask <= fair - take_threshold:
+            self.place_buy(
+                state, product, limit, best_ask,
+                min(int(signal["best_ask_volume"]), take_size),
+                f"HYDRO TAKE BUY @ {best_ask} fair={fair:.2f} anchor={anchor:.2f}",
+            )
+        if best_bid >= fair + take_threshold:
+            self.place_sell(
+                state, product, limit, best_bid,
+                min(int(signal["best_bid_volume"]), take_size),
+                f"HYDRO TAKE SELL @ {best_bid} fair={fair:.2f} anchor={anchor:.2f}",
+            )
+
+        buy_price = min(best_bid + 1, int(math.floor(quote_fair - passive_offset)))
+        sell_price = max(best_ask - 1, int(math.ceil(quote_fair + passive_offset)))
+        if buy_price >= sell_price:
+            buy_price = min(best_bid, sell_price - 1)
+
+        self.place_buy(
+            state, product, limit, buy_price, quote_size,
+            f"HYDRO MM BUY {quote_size} @ {buy_price} fair={fair:.2f} anchor={anchor:.2f}",
+        )
+        self.place_sell(
+            state, product, limit, sell_price, quote_size,
+            f"HYDRO MM SELL {quote_size} @ {sell_price} fair={fair:.2f} anchor={anchor:.2f}",
+        )
+
+        mode = "ema-thick" if thick_book else "prevday-thin"
+        logger.print(
+            f"hydro_mode={mode} mid={mid:.2f} anchor={anchor:.2f} ema={ema:.2f} "
+            f"ret={recent_move:.2f} imb={float(signal['imbalance']):.3f} depth={depth_total:.0f} "
+            f"pos={position} progress={progress:.3f}"
+        )
+
+    def trade_velvet(self, state: TradingState, memory: Dict[str, Any]) -> None:
+        product = str(self.velvet["product"])
+        limit = int(self.velvet["limit"])
+        if product not in state.order_depths:
+            return
+
+        signal = self.book_signal(state.order_depths[product], 6.0)
+        mid = signal["mid"]
+        best_bid = signal["best_bid"]
+        best_ask = signal["best_ask"]
+        if mid is None or best_bid is None or best_ask is None:
+            return
+
+        self.update_velvet_day_anchor(memory, state.timestamp, mid)
+
+        prev_mid = memory["prev_mid"]
+        recent_move = 0.0 if prev_mid is None else mid - float(prev_mid)
+        memory["prev_mid"] = mid
+
+        anchor = float(memory["anchor"])
+        regime_scale = self.regime_scale(
+            float(signal["depth_total"]),
+            float(self.velvet["depth_p25"]),
+            float(self.velvet["depth_p75"]),
+            1.20,
+        )
+        fair = anchor
+        fair -= regime_scale * float(self.velvet["ret_weight"]) * recent_move
+        fair += regime_scale * float(signal["spread"]) * (
+            -float(self.velvet["total_imb_weight"]) * float(signal["imbalance"])
+            + float(self.velvet["l1_imb_weight"]) * float(signal["l1_imbalance"])
+        )
+
+        position = self.get_position(state, product)
+        position_ratio = position / float(limit)
+        quote_fair = fair - float(self.velvet["inventory_skew"]) * position_ratio * float(signal["spread"])
+
+        take_threshold = max(1.0, 0.55 * float(signal["spread"]) / max(0.85, regime_scale))
+        passive_offset = max(1.0, 0.45 * float(signal["spread"]) / max(0.85, regime_scale))
+
+        if best_ask <= fair - take_threshold:
+            self.place_buy(
+                state, product, limit, best_ask,
+                min(int(signal["best_ask_volume"]), max(8, int(round(18 * regime_scale)))),
+                f"VELVET TAKE BUY @ {best_ask} fair={fair:.2f} anchor={anchor:.2f}",
+            )
+        if best_bid >= fair + take_threshold:
+            self.place_sell(
+                state, product, limit, best_bid,
+                min(int(signal["best_bid_volume"]), max(8, int(round(18 * regime_scale)))),
+                f"VELVET TAKE SELL @ {best_bid} fair={fair:.2f} anchor={anchor:.2f}",
+            )
+
+        buy_price = min(best_bid + 1, int(math.floor(quote_fair - passive_offset)))
+        sell_price = max(best_ask - 1, int(math.ceil(quote_fair + passive_offset)))
+        if buy_price >= sell_price:
+            buy_price = min(best_bid, sell_price - 1)
+
+        quote_size = max(8, int(round(float(self.velvet["base_quote_size"]) * regime_scale)))
+        if abs(position) > 0.60 * limit:
+            quote_size = max(4, quote_size // 2)
+
+        self.place_buy(
+            state, product, limit, buy_price, quote_size,
+            f"VELVET MM BUY {quote_size} @ {buy_price} fair={fair:.2f} anchor={anchor:.2f}",
+        )
+        self.place_sell(
+            state, product, limit, sell_price, quote_size,
+            f"VELVET MM SELL {quote_size} @ {sell_price} fair={fair:.2f} anchor={anchor:.2f}",
+        )
+
+        logger.print(
+            f"velvet mid={mid:.2f} anchor={anchor:.2f} day_count={int(memory['day_count'])} "
+            f"ret={recent_move:.2f} imb={float(signal['imbalance']):.3f} "
+            f"l1={float(signal['l1_imbalance']):.3f} pos={position}"
+        )
+
+    def trade_all_options(self, state: TradingState, memory: Dict[str, Any]) -> None:
+        underlying = str(self.options["underlying"])
+        if underlying not in state.order_depths:
+            return
+
+        vv_mid = self.wall_mid(state.order_depths[underlying])
+        if vv_mid is None:
+            return
+
+        self.update_options_day_anchor(memory, state.timestamp, vv_mid)
+        prev_vv_mid = memory["prev_vv_mid"]
+        vv_move = 0.0 if prev_vv_mid is None else vv_mid - float(prev_vv_mid)
+        memory["prev_vv_mid"] = vv_mid
+        vv_anchor = float(memory["vv_anchor"])
+
+        for product in self.options["products"]:
+            if product not in state.order_depths:
+                continue
+
+            signal = self.book_signal(state.order_depths[product], 8.0)
+            mid = signal["mid"]
+            best_bid = signal["best_bid"]
+            best_ask = signal["best_ask"]
+            if mid is None or best_bid is None or best_ask is None:
+                continue
+
+            strike = self.strike_from_symbol(product)
+            fair = vv_anchor - strike
+            fair -= float(self.options["ret_weight"]) * vv_move
+
+            spread = float(signal["spread"])
+            depth_total = float(signal["depth_total"])
+            spread_cap = self.option_spread_cap(float(mid))
+            if depth_total < float(self.options["depth_min"]) or spread > spread_cap:
+                logger.print(
+                    f"{product} skip depth={depth_total:.0f} spread={spread:.1f}/{spread_cap:.1f} fair={fair:.2f} mid={mid:.2f}"
+                )
+                continue
+
+            regime_scale = self.regime_scale(depth_total, 18.0, 80.0, 1.20)
+            edge = fair - mid
+            edge += regime_scale * spread * (
+                -float(self.options["book_weight"]) * float(signal["imbalance"])
+                + float(self.options["l1_weight"]) * float(signal["l1_imbalance"])
+            )
+
+            limit = int(self.options["limit"])
+            position = self.get_position(state, product)
+            quote_fair = fair - float(self.options["inventory_skew"]) * (position / float(limit))
+            take_threshold = max(2.0, 0.45 * spread / max(0.90, regime_scale))
+            passive_offset = max(1.0, 0.35 * spread / max(0.90, regime_scale))
+            quote_size = max(4, int(round(float(self.options["base_quote_size"]) * regime_scale)))
+            if abs(position) > 0.60 * limit:
+                quote_size = max(3, quote_size // 2)
+
+            if edge >= take_threshold:
+                self.place_buy(
+                    state,
+                    product,
+                    limit,
+                    best_ask,
+                    min(int(signal["best_ask_volume"]), int(self.options["take_size"])),
+                    f"{product} TAKE BUY edge={edge:.2f} fair={fair:.2f} vv_anchor={vv_anchor:.2f}",
+                )
+            if edge <= -take_threshold:
+                self.place_sell(
+                    state,
+                    product,
+                    limit,
+                    best_bid,
+                    min(int(signal["best_bid_volume"]), int(self.options["take_size"])),
+                    f"{product} TAKE SELL edge={edge:.2f} fair={fair:.2f} vv_anchor={vv_anchor:.2f}",
+                )
+
+            buy_price = min(best_bid + 1, int(math.floor(quote_fair - passive_offset)))
+            sell_price = max(best_ask - 1, int(math.ceil(quote_fair + passive_offset)))
+            if buy_price >= sell_price:
+                buy_price = min(best_bid, sell_price - 1)
+
+            if edge > take_threshold:
+                self.place_buy(
+                    state,
+                    product,
+                    limit,
+                    buy_price,
+                    quote_size,
+                    f"{product} MM BUY q={quote_size} fair={fair:.2f} vv_anchor={vv_anchor:.2f}",
+                )
+            if edge < -take_threshold:
+                self.place_sell(
+                    state,
+                    product,
+                    limit,
+                    sell_price,
+                    quote_size,
+                    f"{product} MM SELL q={quote_size} fair={fair:.2f} vv_anchor={vv_anchor:.2f}",
+                )
+
+            logger.print(
+                f"{product} vv_mid={vv_mid:.2f} vv_anchor={vv_anchor:.2f} opt_mid={mid:.2f} "
+                f"fair={fair:.2f} edge={edge:.2f} gap={vv_mid - mid:.2f} depth={depth_total:.0f} pos={position}"
+            )
 
     def run(self, state: TradingState):
         self.reset_orders(state)
-
-        if "EMERALDS" in state.order_depths:
-            self.trade_emeralds(state)
-
-        if "TOMATOES" in state.order_depths:
-            self.trade_tomatoes(state)
-
-        logger.flush(state, self.orders, self.conversions, self.traderData)
-        return self.orders, self.conversions, self.traderData
+        memory = self.parse_memory(state.traderData)
+        self.trade_hydrogel(state, memory["hydro"])
+        self.trade_velvet(state, memory["velvet"])
+        self.trade_all_options(state, memory["options"])
+        trader_data = self.encode_memory(memory)
+        logger.flush(state, self.orders, self.conversions, trader_data)
+        return self.orders, self.conversions, trader_data

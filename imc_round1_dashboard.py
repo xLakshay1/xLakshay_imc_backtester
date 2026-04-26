@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import html
+import hashlib
 import itertools
 import io
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -14,21 +16,38 @@ import types
 from contextlib import redirect_stdout
 from types import FunctionType
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import statsmodels.api as sm
 import streamlit as st
+from statsmodels.tsa.stattools import adfuller, coint
 
 
-ROUND1_DATA_DIR = Path("/Users/lakshaykumar/Downloads/ROUND1")
-ROUND2_DATA_DIR = Path("/Users/lakshaykumar/Downloads/ROUND2")
-DEFAULT_DATA_DIR = ROUND2_DATA_DIR if ROUND2_DATA_DIR.exists() else ROUND1_DATA_DIR
+REPO_ROOT = Path(__file__).resolve().parent
+DOWNLOADS_ROOT = Path(os.environ.get("IMC_DOWNLOADS_ROOT", str(Path.home() / "Downloads")))
+ROUND1_DATA_DIR = Path(os.environ.get("IMC_ROUND1_DATA_DIR", str(DOWNLOADS_ROOT / "ROUND1")))
+ROUND2_DATA_DIR = Path(os.environ.get("IMC_ROUND2_DATA_DIR", str(DOWNLOADS_ROOT / "ROUND2")))
+ROUND3_DATA_DIR = Path(os.environ.get("IMC_ROUND3_DATA_DIR", str(DOWNLOADS_ROOT / "ROUND3")))
+DEFAULT_DATA_DIR = (
+    ROUND3_DATA_DIR
+    if ROUND3_DATA_DIR.exists()
+    else ROUND2_DATA_DIR
+    if ROUND2_DATA_DIR.exists()
+    else ROUND1_DATA_DIR
+)
 DATASET_DIRS = {
     "Round 1": (ROUND1_DATA_DIR,),
     "Round 2": (ROUND2_DATA_DIR,),
+    "Round 3": (ROUND3_DATA_DIR,),
     "Rounds 1 + 2": (ROUND1_DATA_DIR, ROUND2_DATA_DIR),
+    "Rounds 1 + 2 + 3": (ROUND1_DATA_DIR, ROUND2_DATA_DIR, ROUND3_DATA_DIR),
 }
-DEFAULT_STRATEGY_ROOT = Path("/Users/lakshaykumar/Documents/Playground/imc-prosperity-4-fresh")
+DEFAULT_STRATEGY_ROOT = Path(os.environ.get("IMC_STRATEGY_ROOT", str(REPO_ROOT)))
+SUBMISSION_HISTORY_DIR = DEFAULT_STRATEGY_ROOT / "dashboard_submission_history"
+SUBMISSION_HISTORY_FILE = SUBMISSION_HISTORY_DIR / "history.json"
+SUBMISSION_HISTORY_CODE_DIR = SUBMISSION_HISTORY_DIR / "code_snapshots"
 BID_COLOR = "#2364AA"
 ASK_COLOR = "#D62828"
 BUY_TRADE_COLOR = "#2A9D8F"
@@ -47,6 +66,53 @@ def strategy(row, state):
     # return [{"side": "sell", "quantity": position, "price": row["bid_price_1"]}]
     return []
 """
+
+ACTUAL_R2_SPEED_COUNTS = [
+    453, 125, 84, 52, 27, 129, 27, 31, 30, 12, 249, 53, 29, 17, 5, 137, 35, 22, 23, 13,
+    281, 78, 44, 33, 22, 172, 63, 54, 22, 14, 242, 57, 42, 68, 99, 155, 184, 118, 75, 37,
+    227, 139, 119, 89, 40, 100, 69, 42, 20, 14, 86, 62, 56, 40, 22, 33, 21, 17, 17, 4,
+    30, 15, 3, 7, 8, 9, 5, 4, 3, 3, 8, 9, 2, 0, 1, 1, 1, 2, 1, 1,
+    4, 2, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    2,
+]
+
+P3_RESOURCES_DIR = Path(
+    os.environ.get(
+        "IMC_P3_RESOURCES_DIR",
+        str(REPO_ROOT / "backtester" / "prosperity3bt" / "resources"),
+    )
+)
+P3_ROUND3_DATA_DIR = P3_RESOURCES_DIR / "round3"
+P3_R3_UNDERLYING = "VOLCANIC_ROCK"
+P3_R3_HUMAN_DISTRIBUTION_IMAGE = Path(
+    os.environ.get(
+        "IMC_P3_R3_HUMAN_DISTRIBUTION_IMAGE",
+        str(REPO_ROOT / "assets" / "p3_r3_human_distribution.png"),
+    )
+)
+P3_R3_OPTION_STRIKES = (9500, 9750, 10000, 10250, 10500)
+P3_R3_OPTION_PRODUCTS = tuple(
+    f"VOLCANIC_ROCK_VOUCHER_{strike}" for strike in P3_R3_OPTION_STRIKES
+)
+P3_R3_FRANKFURT_SMILE_COEFFS = np.array([0.27362531, 0.01007566, 0.14876677], dtype=float)
+P3_R3_THR_OPEN = 0.5
+P3_R3_THR_CLOSE = 0.0
+P3_R3_LOW_VEGA_THR_ADJ = 0.5
+P3_R3_THEO_NORM_WINDOW = 20
+P3_R3_IV_SCALPING_WINDOW = 100
+P3_R3_IV_SCALPING_THR = 0.7
+P3_R3_UNDERLYING_MR_WINDOW = 10
+P3_R3_UNDERLYING_MR_THR = 15.0
+P3_R3_OPTIONS_MR_WINDOW = 30
+P3_R3_OPTIONS_MR_THR = 5.0
+P4_R3_UNDERLYING = "VELVETFRUIT_EXTRACT"
+P4_R3_HYDROGEL = "HYDROGEL_PACK"
+P4_R3_VOUCHER_PREFIX = "VEV_"
+P4_R3_VOUCHER_STRIKES = (4000, 4500, 5000, 5100, 5200, 5300, 5400, 5500, 6000, 6500)
+P4_R3_HISTORICAL_START_TTE_DAYS = 8.0
+P4_R3_MANUAL_RESALE_PRICE = 920
+P4_R3_MANUAL_RESERVE_VALUES = np.arange(670, 925, 5, dtype=float)
+P4_R3_MANUAL_ESTIMATED_MU = 862.0
 
 
 @dataclass(frozen=True)
@@ -288,6 +354,1400 @@ def load_trades(paths: tuple[str, ...]) -> pd.DataFrame:
     for column in ("buyer", "seller", "symbol", "currency"):
         trades[column] = trades[column].fillna("").astype(str)
     return trades.sort_values(["day", "symbol", "timestamp"])
+
+
+def p3_r3_standard_normal_cdf(value: float) -> float:
+    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+
+
+def p3_r3_standard_normal_pdf(value: float) -> float:
+    return math.exp(-0.5 * value * value) / math.sqrt(2.0 * math.pi)
+
+
+def p3_r3_bs_call_metrics(spot: float, strike: float, tau: float, sigma: float) -> tuple[float, float, float, float]:
+    if any(math.isnan(value) for value in (spot, strike, tau, sigma)) or spot <= 0 or strike <= 0:
+        return float("nan"), float("nan"), float("nan"), float("nan")
+    if tau <= 0 or sigma <= 0:
+        intrinsic = max(spot - strike, 0.0)
+        delta = 1.0 if spot > strike else 0.0
+        return intrinsic, delta, 0.0, 0.0
+
+    root_tau = math.sqrt(tau)
+    d1 = (math.log(spot / strike) + 0.5 * sigma * sigma * tau) / (sigma * root_tau)
+    d2 = d1 - sigma * root_tau
+    call_value = spot * p3_r3_standard_normal_cdf(d1) - strike * p3_r3_standard_normal_cdf(d2)
+    delta = p3_r3_standard_normal_cdf(d1)
+    gamma = p3_r3_standard_normal_pdf(d1) / max(spot * sigma * root_tau, 1e-12)
+    vega = spot * p3_r3_standard_normal_pdf(d1) * root_tau
+    return call_value, delta, gamma, vega
+
+
+def p3_r3_implied_volatility(spot: float, strike: float, tau: float, price: float) -> float:
+    if any(pd.isna(value) for value in (spot, strike, tau, price)):
+        return float("nan")
+    intrinsic = max(float(spot) - float(strike), 0.0)
+    if price <= intrinsic + 1e-9 or tau <= 0 or spot <= 0 or strike <= 0:
+        return float("nan")
+
+    low, high = 1e-4, 5.0
+    for _ in range(60):
+        mid = 0.5 * (low + high)
+        mid_price, _, _, _ = p3_r3_bs_call_metrics(float(spot), float(strike), float(tau), float(mid))
+        if pd.isna(mid_price):
+            return float("nan")
+        if mid_price > price:
+            high = mid
+        else:
+            low = mid
+    return 0.5 * (low + high)
+
+
+@st.cache_data(show_spinner=False)
+def load_p4_r3_option_market() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if not ROUND3_DATA_DIR.exists():
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    files = discover_files(str(ROUND3_DATA_DIR))
+    prices = load_prices(files.price_paths)
+    trades = load_trades(files.trade_paths)
+    if prices.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    products = {P4_R3_UNDERLYING, P4_R3_HYDROGEL, *[f"{P4_R3_VOUCHER_PREFIX}{strike}" for strike in P4_R3_VOUCHER_STRIKES]}
+    round3_prices = prices[prices["product"].isin(products)].copy()
+    round3_trades = trades[trades["symbol"].isin(products)].copy()
+
+    if round3_prices.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    options = round3_prices[round3_prices["product"].str.startswith(P4_R3_VOUCHER_PREFIX, na=False)].copy()
+    options["strike"] = (
+        options["product"].str.extract(r"(\d+)$").iloc[:, 0].astype(float)
+    )
+    options["option_wall_mid"] = options["mid_price"]
+    ask_only = options["option_wall_mid"].isna() & options["ask_price_1"].notna()
+    bid_only = options["option_wall_mid"].isna() & options["bid_price_1"].notna()
+    options.loc[ask_only, "option_wall_mid"] = options.loc[ask_only, "ask_price_1"] - 0.5
+    options.loc[bid_only, "option_wall_mid"] = options.loc[bid_only, "bid_price_1"] + 0.5
+
+    underlying = round3_prices[round3_prices["product"] == P4_R3_UNDERLYING].copy()
+    underlying["underlying_wall_mid"] = underlying["mid_price"]
+    ask_only = underlying["underlying_wall_mid"].isna() & underlying["ask_price_1"].notna()
+    bid_only = underlying["underlying_wall_mid"].isna() & underlying["bid_price_1"].notna()
+    underlying.loc[ask_only, "underlying_wall_mid"] = underlying.loc[ask_only, "ask_price_1"] - 0.5
+    underlying.loc[bid_only, "underlying_wall_mid"] = underlying.loc[bid_only, "bid_price_1"] + 0.5
+
+    merge_columns = [
+        "day",
+        "timestamp",
+        "underlying_wall_mid",
+        "bid_price_1",
+        "ask_price_1",
+    ]
+    options = options.merge(
+        underlying[merge_columns].rename(
+            columns={
+                "bid_price_1": "underlying_bid_1",
+                "ask_price_1": "underlying_ask_1",
+            }
+        ),
+        on=["day", "timestamp"],
+        how="left",
+    )
+    return options, underlying, round3_trades
+
+
+@st.cache_data(show_spinner=False)
+def build_p4_r3_option_analysis(selected_day: int, sample_points_per_strike: int = 350) -> dict[str, object]:
+    options_raw, underlying_raw, trades_raw = load_p4_r3_option_market()
+    if options_raw.empty:
+        return {
+            "options": pd.DataFrame(),
+            "underlying": pd.DataFrame(),
+            "trades": pd.DataFrame(),
+            "scatter": pd.DataFrame(),
+            "coeffs": np.array([float("nan")] * 3, dtype=float),
+            "strike_table": pd.DataFrame(),
+        }
+
+    options = options_raw[options_raw["day"] == int(selected_day)].copy()
+    underlying = underlying_raw[underlying_raw["day"] == int(selected_day)].copy()
+    trades = trades_raw[trades_raw["day"] == int(selected_day)].copy()
+    if options.empty or underlying.empty:
+        return {
+            "options": pd.DataFrame(),
+            "underlying": underlying,
+            "trades": trades,
+            "scatter": pd.DataFrame(),
+            "coeffs": np.array([float("nan")] * 3, dtype=float),
+            "strike_table": pd.DataFrame(),
+        }
+
+    options["tte_days"] = (
+        P4_R3_HISTORICAL_START_TTE_DAYS - float(selected_day) - options["timestamp"] / 1_000_000.0
+    ).clip(lower=0.05)
+    options["tau_years"] = options["tte_days"] / 365.0
+    options["underlying_price"] = pd.to_numeric(options["underlying_wall_mid"], errors="coerce")
+    options["option_price"] = pd.to_numeric(options["option_wall_mid"], errors="coerce")
+    options["voucher"] = options["product"]
+    options["intrinsic"] = (options["underlying_price"] - options["strike"]).clip(lower=0.0)
+    options["extrinsic"] = options["option_price"] - options["intrinsic"]
+    options["log_moneyness"] = np.log(
+        options["strike"] / options["underlying_price"].replace(0, pd.NA)
+    )
+
+    iv_inputs = options[["underlying_price", "strike", "tau_years", "option_price"]].itertuples(index=False, name=None)
+    options["market_iv"] = [
+        p3_r3_implied_volatility(spot, strike, tau, price)
+        for spot, strike, tau, price in iv_inputs
+    ]
+
+    fit_frame = options.dropna(subset=["market_iv", "log_moneyness"]).copy()
+    fit_frame = fit_frame[fit_frame["market_iv"].between(0.01, 3.0)]
+    if len(fit_frame) >= 12:
+        coeffs = np.polyfit(fit_frame["log_moneyness"], fit_frame["market_iv"], 2)
+    else:
+        coeffs = np.array([0.0, 0.0, float(fit_frame["market_iv"].median()) if not fit_frame.empty else 0.25], dtype=float)
+
+    options["smile_iv"] = np.polyval(coeffs, options["log_moneyness"])
+    options["iv_residual"] = options["market_iv"] - options["smile_iv"]
+
+    scatter = (
+        fit_frame.groupby("strike", group_keys=False)
+        .apply(lambda frame: frame.sample(min(len(frame), int(sample_points_per_strike)), random_state=42))
+        .reset_index(drop=True)
+        if not fit_frame.empty
+        else fit_frame
+    )
+
+    strike_table = (
+        options.groupby(["product", "strike"], as_index=False)
+        .agg(
+            mean_iv=("market_iv", "mean"),
+            mean_smile_iv=("smile_iv", "mean"),
+            mean_residual=("iv_residual", "mean"),
+            residual_std=("iv_residual", "std"),
+            mean_price=("option_price", "mean"),
+        )
+        .sort_values("strike")
+    )
+
+    return {
+        "options": options.sort_values(["timestamp", "strike"]),
+        "underlying": underlying.sort_values("timestamp"),
+        "trades": trades.sort_values(["timestamp", "symbol"]),
+        "scatter": scatter.sort_values(["timestamp", "strike"]) if not scatter.empty else scatter,
+        "coeffs": np.asarray(coeffs, dtype=float),
+        "strike_table": strike_table,
+    }
+
+
+def p4_r3_smile_fit_chart(
+    scatter: pd.DataFrame,
+    options: pd.DataFrame,
+    coeffs: np.ndarray,
+    focus_timestamp: int,
+) -> go.Figure:
+    fig = go.Figure()
+    if scatter.empty or options.empty:
+        return apply_mc_chart_layout(fig, "Round 3 Option Smile Fit", height=380)
+
+    for strike, sub in scatter.groupby("strike", sort=True):
+        fig.add_trace(
+            go.Scatter(
+                x=sub["log_moneyness"],
+                y=sub["market_iv"],
+                mode="markers",
+                name=f"VEV_{int(strike)}",
+                marker={"size": 4, "opacity": 0.28},
+                hovertemplate="m=%{x:.4f}<br>IV=%{y:.4f}<extra></extra>",
+            )
+        )
+
+    grid_x = np.linspace(float(scatter["log_moneyness"].min()), float(scatter["log_moneyness"].max()), 200)
+    fig.add_trace(
+        go.Scatter(
+            x=grid_x,
+            y=np.polyval(coeffs, grid_x),
+            mode="lines",
+            name="Quadratic smile fit",
+            line={"color": "#111111", "width": 4},
+            hovertemplate="m=%{x:.4f}<br>fit=%{y:.4f}<extra></extra>",
+        )
+    )
+
+    snap = options.loc[options["timestamp"] == int(focus_timestamp)].dropna(subset=["market_iv", "log_moneyness"])
+    if not snap.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=snap["log_moneyness"],
+                y=snap["market_iv"],
+                mode="markers+text",
+                name=f"Current snapshot t={focus_timestamp}",
+                text=[f"{int(k)}" for k in snap["strike"]],
+                textposition="top center",
+                marker={"size": 9, "color": "#ff5f5f", "line": {"color": "#ffffff", "width": 1}},
+                hovertemplate="strike=%{text}<br>m=%{x:.4f}<br>IV=%{y:.4f}<extra></extra>",
+            )
+        )
+
+    fig.update_xaxes(title="log-moneyness log(K / S)")
+    fig.update_yaxes(title="observed implied volatility")
+    return apply_mc_chart_layout(fig, "Round 3 Option Smile Fit (Parabola Across Strikes)", height=420)
+
+
+def p4_r3_iv_residual_chart(options: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if options.empty:
+        return apply_mc_chart_layout(fig, "Round 3 Detrended IV Residuals", height=380)
+
+    for strike, sub in options.dropna(subset=["iv_residual"]).groupby("strike", sort=True):
+        fig.add_trace(
+            go.Scatter(
+                x=sub["timestamp"],
+                y=sub["iv_residual"],
+                mode="lines",
+                name=f"VEV_{int(strike)}",
+                line={"width": 1.8},
+                hovertemplate="t=%{x}<br>resid=%{y:.4f}<extra></extra>",
+            )
+        )
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="timestamp")
+    fig.update_yaxes(title="market IV - quadratic smile IV")
+    return apply_mc_chart_layout(fig, "Round 3 Detrended IV Residuals", height=420)
+
+
+def p4_r3_snapshot_residual_chart(options: pd.DataFrame, focus_timestamp: int) -> go.Figure:
+    fig = go.Figure()
+    if options.empty:
+        return apply_mc_chart_layout(fig, "Snapshot Residuals by Strike", height=360)
+
+    snapshot = (
+        options.assign(ts_distance=(options["timestamp"] - int(focus_timestamp)).abs())
+        .sort_values(["strike", "ts_distance", "timestamp"])
+        .groupby("strike", as_index=False)
+        .first()
+    )
+    snapshot = snapshot.dropna(subset=["iv_residual", "market_iv", "smile_iv"])
+    if snapshot.empty:
+        return apply_mc_chart_layout(fig, "Snapshot Residuals by Strike", height=360)
+
+    fig.add_trace(
+        go.Bar(
+            x=[f"VEV_{int(strike)}" for strike in snapshot["strike"]],
+            y=snapshot["iv_residual"],
+            marker_color=["#59c17a" if value < 0 else "#ff7b72" for value in snapshot["iv_residual"]],
+            text=[f"{value:+.4f}" for value in snapshot["iv_residual"]],
+            textposition="outside",
+            name="Detrended IV residual",
+            hovertemplate="%{x}<br>residual=%{y:.4f}<extra></extra>",
+        )
+    )
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="voucher strike")
+    fig.update_yaxes(title="IV residual")
+    return apply_mc_chart_layout(fig, "Snapshot Residuals by Strike", height=360)
+
+
+@st.cache_data(show_spinner=False)
+def build_p4_r3_delta1_diagnostics(
+    selected_day: int,
+    rolling_window: int = 120,
+    beta_window: int = 250,
+    max_lag: int = 20,
+    random_baselines: int = 40,
+) -> dict[str, object]:
+    if not ROUND3_DATA_DIR.exists():
+        return {}
+
+    files = discover_files(str(ROUND3_DATA_DIR))
+    prices = load_prices(files.price_paths)
+    if prices.empty:
+        return {}
+
+    subset = prices[
+        (prices["day"] == int(selected_day))
+        & (prices["product"].isin([P4_R3_HYDROGEL, P4_R3_UNDERLYING]))
+    ].copy()
+    if subset.empty:
+        return {}
+
+    subset["wall_mid"] = subset["mid_price"]
+    ask_only = subset["wall_mid"].isna() & subset["ask_price_1"].notna()
+    bid_only = subset["wall_mid"].isna() & subset["bid_price_1"].notna()
+    subset.loc[ask_only, "wall_mid"] = subset.loc[ask_only, "ask_price_1"] - 0.5
+    subset.loc[bid_only, "wall_mid"] = subset.loc[bid_only, "bid_price_1"] + 0.5
+    bid_cols = [f"bid_volume_{level}" for level in (1, 2, 3)]
+    ask_cols = [f"ask_volume_{level}" for level in (1, 2, 3)]
+    subset["bid_total"] = subset[bid_cols].fillna(0).sum(axis=1)
+    subset["ask_total"] = subset[ask_cols].fillna(0).sum(axis=1)
+    subset["depth_total"] = subset["bid_total"] + subset["ask_total"]
+    subset["imbalance"] = np.where(
+        subset["depth_total"] > 0,
+        (subset["bid_total"] - subset["ask_total"]) / subset["depth_total"],
+        np.nan,
+    )
+    subset["l1_total"] = subset["bid_volume_1"].fillna(0) + subset["ask_volume_1"].fillna(0)
+    subset["l1_imbalance"] = np.where(
+        subset["l1_total"] > 0,
+        (subset["bid_volume_1"].fillna(0) - subset["ask_volume_1"].fillna(0)) / subset["l1_total"],
+        np.nan,
+    )
+
+    wide = (
+        subset.pivot_table(index="timestamp", columns="product", values="wall_mid", aggfunc="last")
+        .sort_index()
+        .rename_axis(columns=None)
+    )
+    if P4_R3_HYDROGEL not in wide.columns or P4_R3_UNDERLYING not in wide.columns:
+        return {}
+    wide = wide[[P4_R3_HYDROGEL, P4_R3_UNDERLYING]].dropna().copy()
+    if len(wide) < max(rolling_window + 5, beta_window + 5, 100):
+        return {}
+
+    wide["hydrogel_log"] = np.log(wide[P4_R3_HYDROGEL].replace(0, np.nan))
+    wide["velvet_log"] = np.log(wide[P4_R3_UNDERLYING].replace(0, np.nan))
+    wide["hydrogel_ret"] = wide["hydrogel_log"].diff()
+    wide["velvet_ret"] = wide["velvet_log"].diff()
+    wide = wide.dropna().copy()
+    if len(wide) < max(rolling_window + 5, beta_window + 5, 80):
+        return {}
+
+    rolling_autocorr_rows: list[dict[str, float | int | str]] = []
+    rng = np.random.default_rng(42 + int(selected_day))
+    for product_name, ret_col in [("HYDROGEL_PACK", "hydrogel_ret"), ("VELVETFRUIT_EXTRACT", "velvet_ret")]:
+        series = wide[ret_col].astype(float)
+        real = series.rolling(rolling_window).corr(series.shift(1))
+        for timestamp, value in real.dropna().items():
+            rolling_autocorr_rows.append(
+                {"timestamp": int(timestamp), "value": float(value), "series": product_name}
+            )
+
+        centered_std = float(series.std(ddof=1))
+        if not np.isfinite(centered_std) or centered_std <= 0:
+            centered_std = 1e-6
+        for baseline_id in range(int(random_baselines)):
+            random_series = pd.Series(
+                rng.normal(0.0, centered_std, size=len(series)),
+                index=series.index,
+            )
+            rand_ac = random_series.rolling(rolling_window).corr(random_series.shift(1))
+            for timestamp, value in rand_ac.dropna().items():
+                rolling_autocorr_rows.append(
+                    {
+                        "timestamp": int(timestamp),
+                        "value": float(value),
+                        "series": product_name,
+                        "baseline": baseline_id + 1,
+                        "kind": "random",
+                    }
+                )
+
+    autocorr_frame = pd.DataFrame(rolling_autocorr_rows)
+    autocorr_frame["kind"] = autocorr_frame.get("kind", "real").fillna("real")
+
+    x = wide["hydrogel_log"].astype(float)
+    y = wide["velvet_log"].astype(float)
+    coint_t, coint_p, crit = coint(y, x)
+    ols_fit = sm.OLS(y, sm.add_constant(x)).fit()
+    beta_static = float(ols_fit.params.iloc[1])
+    alpha_static = float(ols_fit.params.iloc[0])
+    wide["spread_static"] = y - (alpha_static + beta_static * x)
+
+    rolling_cov = wide["velvet_log"].rolling(beta_window).cov(wide["hydrogel_log"])
+    rolling_var = wide["hydrogel_log"].rolling(beta_window).var()
+    wide["rolling_beta"] = rolling_cov / rolling_var.replace(0, np.nan)
+    wide["rolling_beta"] = wide["rolling_beta"].replace([np.inf, -np.inf], np.nan).ffill()
+    wide["rolling_alpha"] = (
+        wide["velvet_log"].rolling(beta_window).mean()
+        - wide["rolling_beta"] * wide["hydrogel_log"].rolling(beta_window).mean()
+    )
+    wide["rolling_spread"] = wide["velvet_log"] - (
+        wide["rolling_alpha"] + wide["rolling_beta"] * wide["hydrogel_log"]
+    )
+    spread_mean = wide["rolling_spread"].rolling(beta_window).mean()
+    spread_std = wide["rolling_spread"].rolling(beta_window).std().replace(0, np.nan)
+    wide["spread_z"] = (wide["rolling_spread"] - spread_mean) / spread_std
+
+    lag_rows: list[dict[str, float | int]] = []
+    hydro_ret = wide["hydrogel_ret"]
+    velvet_ret = wide["velvet_ret"]
+    for lag in range(-int(max_lag), int(max_lag) + 1):
+        corr_h_to_v = hydro_ret.corr(velvet_ret.shift(-lag))
+        corr_v_to_h = velvet_ret.corr(hydro_ret.shift(-lag))
+        lag_rows.append({"lag": lag, "pair": "Hydrogel leads Velvet", "corr": float(corr_h_to_v)})
+        lag_rows.append({"lag": lag, "pair": "Velvet leads Hydrogel", "corr": float(corr_v_to_h)})
+    lead_lag_frame = pd.DataFrame(lag_rows)
+
+    adf_frame = wide["spread_static"].dropna()
+    adf_p_value = float("nan")
+    if len(adf_frame) > 40:
+        try:
+            adf_p_value = float(adfuller(adf_frame, maxlag=1, regression="c", autolag=None)[1])
+        except Exception:
+            adf_p_value = float("nan")
+
+    half_life = float("nan")
+    spread_reg = pd.DataFrame(
+        {"delta": wide["spread_static"].diff(), "lagged": wide["spread_static"].shift(1)}
+    ).dropna()
+    if len(spread_reg) > 25:
+        try:
+            hl_fit = sm.OLS(spread_reg["delta"], sm.add_constant(spread_reg["lagged"])).fit()
+            decay = float(hl_fit.params.iloc[1])
+            if np.isfinite(decay) and decay < 0:
+                half_life = float(np.log(2.0) / (-decay))
+        except Exception:
+            half_life = float("nan")
+
+    signal_rows: list[dict[str, object]] = []
+    regime_rows: list[dict[str, object]] = []
+    for product_name in [P4_R3_HYDROGEL, P4_R3_UNDERLYING]:
+        prod = subset[subset["product"] == product_name].sort_values("timestamp").copy()
+        prod["log_price"] = np.log(prod["wall_mid"].replace(0, np.nan))
+        prod["ret_1"] = prod["log_price"].diff()
+        for horizon in (1, 5, 10):
+            prod[f"future_ret_{horizon}"] = prod["log_price"].shift(-horizon) - prod["log_price"]
+
+        for feature_name, label in [("imbalance", "Total imbalance"), ("l1_imbalance", "L1 imbalance")]:
+            for horizon in (1, 5, 10):
+                frame = prod[[feature_name, f"future_ret_{horizon}"]].dropna()
+                if frame.empty:
+                    corr = float("nan")
+                    beta_bp = float("nan")
+                else:
+                    corr = float(frame[feature_name].corr(frame[f"future_ret_{horizon}"]))
+                    beta_bp = float(frame[f"future_ret_{horizon}"].cov(frame[feature_name]) / frame[feature_name].var()) * 1e4
+                signal_rows.append(
+                    {
+                        "product": product_name,
+                        "feature": label,
+                        "horizon": horizon,
+                        "corr": corr,
+                        "beta_bp": beta_bp,
+                    }
+                )
+
+        depth_rank = prod["depth_total"].rank(method="first")
+        if depth_rank.notna().sum() >= 9:
+            prod["depth_regime"] = pd.qcut(depth_rank, 3, labels=["thin", "mid", "thick"])
+            for regime, frame in prod.groupby("depth_regime", observed=False):
+                ret_frame = frame["ret_1"].dropna()
+                if len(ret_frame) < 10:
+                    continue
+                regime_rows.append(
+                    {
+                        "product": product_name,
+                        "regime": str(regime),
+                        "lag1_corr": float(ret_frame.autocorr(lag=1)),
+                        "flip_rate": float((np.sign(ret_frame) != np.sign(ret_frame.shift(1))).dropna().mean()),
+                    }
+                )
+
+    signal_frame = pd.DataFrame(signal_rows)
+    regime_frame = pd.DataFrame(regime_rows)
+
+    summary = pd.DataFrame(
+        [
+            {
+                "Metric": "Static cointegration beta",
+                "Value": f"{beta_static:.4f}",
+                "Meaning": "OLS slope in log-price space for Velvet on Hydrogel.",
+            },
+            {
+                "Metric": "Engle-Granger t-stat",
+                "Value": f"{coint_t:.4f}",
+                "Meaning": "More negative means stronger evidence of a stationary spread.",
+            },
+            {
+                "Metric": "Engle-Granger p-value",
+                "Value": f"{coint_p:.6f}",
+                "Meaning": "Small p-value supports cointegration rather than just visual co-movement.",
+            },
+            {
+                "Metric": "Spread ADF p-value",
+                "Value": f"{adf_p_value:.6f}" if np.isfinite(adf_p_value) else "n/a",
+                "Meaning": "Tests whether the static Hydrogel/Velvet spread itself looks stationary on this day.",
+            },
+            {
+                "Metric": "Spread half-life",
+                "Value": f"{half_life:.2f} ticks" if np.isfinite(half_life) else "n/a",
+                "Meaning": "Crude OU-style estimate of how quickly spread shocks decay back toward equilibrium.",
+            },
+            {
+                "Metric": "Hydrogel mean rolling AR(1)",
+                "Value": f"{autocorr_frame[(autocorr_frame['series']=='HYDROGEL_PACK') & (autocorr_frame['kind']=='real')]['value'].mean():.4f}",
+                "Meaning": "Negative values indicate short-horizon mean reversion in returns.",
+            },
+            {
+                "Metric": "Velvet mean rolling AR(1)",
+                "Value": f"{autocorr_frame[(autocorr_frame['series']=='VELVETFRUIT_EXTRACT') & (autocorr_frame['kind']=='real')]['value'].mean():.4f}",
+                "Meaning": "More negative than Hydrogel means cleaner short-horizon snap-back.",
+            },
+            {
+                "Metric": "Best lead-lag corr",
+                "Value": f"{lead_lag_frame.loc[lead_lag_frame['corr'].abs().idxmax(), 'corr']:.4f}",
+                "Meaning": f"{lead_lag_frame.loc[lead_lag_frame['corr'].abs().idxmax(), 'pair']} at lag {int(lead_lag_frame.loc[lead_lag_frame['corr'].abs().idxmax(), 'lag'])}.",
+            },
+            {
+                "Metric": "Velvet total imbalance -> h1 return",
+                "Value": f"{signal_frame[(signal_frame['product']==P4_R3_UNDERLYING) & (signal_frame['feature']=='Total imbalance') & (signal_frame['horizon']==1)]['corr'].iloc[0]:.4f}",
+                "Meaning": "Negative means broad-book bid pressure tends to reverse rather than continue.",
+            },
+            {
+                "Metric": "Velvet thick-book AR(1)",
+                "Value": f"{regime_frame[(regime_frame['product']==P4_R3_UNDERLYING) & (regime_frame['regime']=='thick')]['lag1_corr'].iloc[0]:.4f}" if not regime_frame[(regime_frame['product']==P4_R3_UNDERLYING) & (regime_frame['regime']=='thick')].empty else "n/a",
+                "Meaning": "More negative in thick books means snap-back is strongest when the visible book is deepest.",
+            },
+        ]
+    )
+
+    return {
+        "wide": wide.reset_index(),
+        "autocorr_frame": autocorr_frame,
+        "lead_lag_frame": lead_lag_frame,
+        "signal_frame": signal_frame,
+        "regime_frame": regime_frame,
+        "summary": summary,
+        "cointegration": {
+            "beta": beta_static,
+            "alpha": alpha_static,
+            "t_stat": float(coint_t),
+            "p_value": float(coint_p),
+            "crit_1": float(crit[0]),
+            "crit_5": float(crit[1]),
+            "crit_10": float(crit[2]),
+            "adf_p_value": adf_p_value,
+            "half_life": half_life,
+        },
+    }
+
+
+def p4_r3_rolling_autocorr_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Rolling Return Autocorrelation vs Random", height=420)
+
+    for product in ["HYDROGEL_PACK", "VELVETFRUIT_EXTRACT"]:
+        random_sub = frame[(frame["series"] == product) & (frame["kind"] == "random")]
+        for _, sub in random_sub.groupby("baseline", sort=False):
+            fig.add_trace(
+                go.Scatter(
+                    x=sub["timestamp"],
+                    y=sub["value"],
+                    mode="lines",
+                    line={"color": "rgba(180,180,180,0.10)", "width": 1},
+                    showlegend=False,
+                    hoverinfo="skip",
+                )
+            )
+        real = frame[(frame["series"] == product) & (frame["kind"] == "real")]
+        fig.add_trace(
+            go.Scatter(
+                x=real["timestamp"],
+                y=real["value"],
+                mode="lines",
+                name=product,
+                line={"width": 3},
+                hovertemplate="t=%{x}<br>rolling AR(1)=%{y:.4f}<extra></extra>",
+            )
+        )
+
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="timestamp")
+    fig.update_yaxes(title="rolling lag-1 return autocorrelation")
+    return apply_mc_chart_layout(fig, "Rolling Return Autocorrelation vs Random", height=420)
+
+
+def p4_r3_rolling_beta_spread_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.10,
+        subplot_titles=("Rolling beta (Velvet on Hydrogel)", "Rolling spread z-score"),
+    )
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Rolling Beta and Spread", height=520)
+
+    fig.add_trace(
+        go.Scatter(
+            x=frame["timestamp"],
+            y=frame["rolling_beta"],
+            mode="lines",
+            name="rolling beta",
+            line={"color": "#5dade2", "width": 2.5},
+            hovertemplate="t=%{x}<br>beta=%{y:.4f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["timestamp"],
+            y=frame["spread_z"],
+            mode="lines",
+            name="spread z-score",
+            line={"color": "#f4a261", "width": 2.5},
+            hovertemplate="t=%{x}<br>z=%{y:.4f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"}, row=2, col=1)
+    fig.add_hline(y=2.0, line={"color": "#8792a2", "width": 1, "dash": "dash"}, row=2, col=1)
+    fig.add_hline(y=-2.0, line={"color": "#8792a2", "width": 1, "dash": "dash"}, row=2, col=1)
+    fig.update_xaxes(title="timestamp", row=2, col=1)
+    fig.update_yaxes(title="beta", row=1, col=1)
+    fig.update_yaxes(title="spread z", row=2, col=1)
+    return apply_mc_chart_layout(fig, "Rolling Beta and Spread", height=560)
+
+
+def p4_r3_lead_lag_heatmap(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Lead-Lag Correlation Heatmap", height=320)
+    pivot = frame.pivot(index="pair", columns="lag", values="corr").loc[
+        ["Hydrogel leads Velvet", "Velvet leads Hydrogel"]
+    ]
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot.values,
+            x=pivot.columns.astype(int),
+            y=pivot.index,
+            colorscale="RdBu",
+            zmid=0.0,
+            colorbar={"title": "corr"},
+            hovertemplate="%{y}<br>lag=%{x}<br>corr=%{z:.4f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="lag")
+    fig.update_yaxes(title="")
+    return apply_mc_chart_layout(fig, "Lead-Lag Correlation Heatmap", height=320)
+
+
+def p4_r3_delta1_signal_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Book Imbalance vs Future Returns", height=360)
+
+    chart = frame[frame["horizon"].isin([1, 5])].copy()
+    chart["label"] = chart["product"].map(
+        {
+            P4_R3_HYDROGEL: "Hydrogel",
+            P4_R3_UNDERLYING: "Velvet",
+        }
+    ) + " · " + chart["feature"]
+    for horizon, sub in chart.groupby("horizon", sort=True):
+        fig.add_trace(
+            go.Bar(
+                x=sub["label"],
+                y=sub["corr"],
+                name=f"h={int(horizon)}",
+                text=[f"{value:+.3f}" for value in sub["corr"]],
+                textposition="outside",
+                hovertemplate="%{x}<br>corr=%{y:.4f}<extra></extra>",
+            )
+        )
+
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="")
+    fig.update_yaxes(title="corr(signal, future return)")
+    return apply_mc_chart_layout(fig, "Book Imbalance vs Future Returns", height=380)
+
+
+def p4_r3_depth_regime_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Depth Regime and Mean Reversion", height=360)
+
+    order = ["thin", "mid", "thick"]
+    colors = {
+        P4_R3_HYDROGEL: "#5dade2",
+        P4_R3_UNDERLYING: "#f4a261",
+    }
+    for product_name in [P4_R3_HYDROGEL, P4_R3_UNDERLYING]:
+        sub = frame[frame["product"] == product_name].copy()
+        sub["regime"] = pd.Categorical(sub["regime"], categories=order, ordered=True)
+        sub = sub.sort_values("regime")
+        fig.add_trace(
+            go.Bar(
+                x=sub["regime"],
+                y=sub["lag1_corr"],
+                name="Hydrogel" if product_name == P4_R3_HYDROGEL else "Velvet",
+                marker_color=colors[product_name],
+                text=[f"{value:+.3f}" for value in sub["lag1_corr"]],
+                textposition="outside",
+                hovertemplate="%{x}<br>lag1 corr=%{y:.4f}<extra></extra>",
+            )
+        )
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="depth regime")
+    fig.update_yaxes(title="lag-1 return autocorr")
+    return apply_mc_chart_layout(fig, "Depth Regime and Mean Reversion", height=360)
+
+
+@st.cache_data(show_spinner=False)
+def build_p4_r3_option_microstructure_diagnostics(selected_day: int, max_lag: int = 12) -> dict[str, object]:
+    analysis = build_p4_r3_option_analysis(int(selected_day))
+    options = analysis.get("options", pd.DataFrame()).copy()
+    underlying = analysis.get("underlying", pd.DataFrame()).copy()
+    if options.empty or underlying.empty:
+        return {}
+
+    options = options.sort_values(["strike", "timestamp"]).copy()
+    options["option_ret_1"] = options.groupby("strike", sort=False)["option_price"].diff()
+    for horizon in (1, 3, 5):
+        options[f"future_ret_{horizon}"] = (
+            options.groupby("strike", sort=False)["option_price"].shift(-horizon) - options["option_price"]
+        )
+
+    signal_rows: list[dict[str, object]] = []
+    for strike, sub in options.groupby("strike", sort=True):
+        for horizon in (1, 3, 5):
+            frame = sub[["iv_residual", f"future_ret_{horizon}"]].dropna()
+            corr = float(frame["iv_residual"].corr(frame[f"future_ret_{horizon}"])) if not frame.empty else float("nan")
+            hit_rate = float((np.sign(frame["iv_residual"]) != np.sign(frame[f"future_ret_{horizon}"])).mean()) if not frame.empty else float("nan")
+            signal_rows.append(
+                {
+                    "strike": int(strike),
+                    "voucher": f"VEV_{int(strike)}",
+                    "horizon": horizon,
+                    "corr": corr,
+                    "mean_reversion_hit": hit_rate,
+                }
+            )
+    residual_signal = pd.DataFrame(signal_rows)
+
+    under = underlying.sort_values("timestamp").copy()
+    under["under_ret"] = np.log(under["underlying_wall_mid"].replace(0, np.nan)).diff()
+    lead_lag_rows: list[dict[str, object]] = []
+    for strike, sub in options.groupby("strike", sort=True):
+        merged = pd.merge(
+            under[["timestamp", "under_ret"]],
+            sub[["timestamp", "option_ret_1"]],
+            on="timestamp",
+            how="inner",
+        ).dropna()
+        for lag in range(-int(max_lag), int(max_lag) + 1):
+            corr = float(merged["under_ret"].corr(merged["option_ret_1"].shift(-lag)))
+            lead_lag_rows.append(
+                {
+                    "strike": int(strike),
+                    "voucher": f"VEV_{int(strike)}",
+                    "lag": lag,
+                    "corr": corr,
+                }
+            )
+    under_option_lag = pd.DataFrame(lead_lag_rows)
+
+    options["spread"] = options["ask_price_1"] - options["bid_price_1"]
+    options["bid_total"] = options[[f"bid_volume_{level}" for level in (1, 2, 3)]].fillna(0).sum(axis=1)
+    options["ask_total"] = options[[f"ask_volume_{level}" for level in (1, 2, 3)]].fillna(0).sum(axis=1)
+    options["depth_total"] = options["bid_total"] + options["ask_total"]
+    options["total_imbalance"] = np.where(
+        options["depth_total"] > 0,
+        (options["bid_total"] - options["ask_total"]) / options["depth_total"],
+        np.nan,
+    )
+    options["l1_size_pair"] = (
+        options["bid_volume_1"].fillna(0).astype(int).astype(str)
+        + " x "
+        + options["ask_volume_1"].fillna(0).astype(int).astype(str)
+    )
+    options["quote_signature"] = (
+        options["bid_price_1"].fillna(-1).astype(int).astype(str)
+        + "|"
+        + options["ask_price_1"].fillna(-1).astype(int).astype(str)
+        + "|"
+        + options["l1_size_pair"]
+    )
+
+    imbalance_wide = (
+        options.pivot_table(index="timestamp", columns="voucher", values="total_imbalance", aggfunc="last")
+        .sort_index()
+    )
+    imbalance_corr = imbalance_wide.corr()
+
+    sync_rows: list[dict[str, object]] = []
+    prev_quotes: pd.Series | None = None
+    for timestamp, frame in options.groupby("timestamp", sort=True):
+        active = frame["voucher"].nunique()
+        if active == 0:
+            continue
+        spread_counts = frame["spread"].dropna().value_counts()
+        size_counts = frame["l1_size_pair"].dropna().value_counts()
+        spread_mode_share = float(spread_counts.max() / active) if not spread_counts.empty else float("nan")
+        size_mode_share = float(size_counts.max() / active) if not size_counts.empty else float("nan")
+        current_quotes = frame.set_index("voucher")["quote_signature"].sort_index()
+        quote_change_share = float("nan")
+        if prev_quotes is not None:
+            aligned = pd.concat([prev_quotes.rename("prev"), current_quotes.rename("curr")], axis=1).dropna()
+            if not aligned.empty:
+                quote_change_share = float((aligned["prev"] != aligned["curr"]).mean())
+        prev_quotes = current_quotes
+        sync_rows.append(
+            {
+                "timestamp": int(timestamp),
+                "active_strikes": active,
+                "spread_mode_share": spread_mode_share,
+                "size_mode_share": size_mode_share,
+                "quote_change_share": quote_change_share,
+            }
+        )
+    sync_frame = pd.DataFrame(sync_rows)
+
+    template_table = (
+        options["l1_size_pair"]
+        .value_counts(dropna=False)
+        .rename_axis("L1 bid x ask")
+        .reset_index(name="Snapshots")
+        .head(8)
+    )
+    template_table["Share"] = template_table["Snapshots"] / max(len(options), 1)
+
+    adjacent_corrs: list[float] = []
+    ordered_vouchers = [f"VEV_{strike}" for strike in P4_R3_VOUCHER_STRIKES]
+    for left, right in zip(ordered_vouchers[:-1], ordered_vouchers[1:]):
+        if left in imbalance_corr.index and right in imbalance_corr.columns:
+            adjacent_corrs.append(float(imbalance_corr.loc[left, right]))
+
+    bot_summary = pd.DataFrame(
+        [
+            {
+                "Metric": "Mean same-spread share",
+                "Value": f"{sync_frame['spread_mode_share'].mean():.3f}" if not sync_frame.empty else "n/a",
+                "Meaning": "Share of active strikes quoting the modal bid-ask spread at the same timestamp.",
+            },
+            {
+                "Metric": "Mean same-size share",
+                "Value": f"{sync_frame['size_mode_share'].mean():.3f}" if not sync_frame.empty else "n/a",
+                "Meaning": "Share of active strikes reusing the same L1 size template at the same timestamp.",
+            },
+            {
+                "Metric": "Mean quote-change share",
+                "Value": f"{sync_frame['quote_change_share'].dropna().mean():.3f}" if not sync_frame['quote_change_share'].dropna().empty else "n/a",
+                "Meaning": "Fraction of strikes whose top quote changed together from one timestamp to the next.",
+            },
+            {
+                "Metric": "Adj. imbalance corr",
+                "Value": f"{np.nanmean(adjacent_corrs):.4f}" if adjacent_corrs else "n/a",
+                "Meaning": "Average adjacent-strike correlation in total imbalance; high values imply synchronized quoting templates.",
+            },
+            {
+                "Metric": "Residual mean-reversion sweet spot",
+                "Value": residual_signal.loc[residual_signal["corr"].abs().idxmax(), "voucher"] if not residual_signal.empty else "n/a",
+                "Meaning": "Strike with the strongest residual-to-future-return relationship on this day.",
+            },
+        ]
+    )
+
+    return {
+        "residual_signal": residual_signal,
+        "under_option_lag": under_option_lag,
+        "imbalance_corr": imbalance_corr,
+        "sync_frame": sync_frame,
+        "template_table": template_table,
+        "bot_summary": bot_summary,
+    }
+
+
+def p4_r3_option_residual_signal_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Residual Mispricing vs Future Option Move", height=360)
+
+    pivot = frame.pivot(index="voucher", columns="horizon", values="corr").sort_index()
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot.values,
+            x=[f"h={int(column)}" for column in pivot.columns],
+            y=pivot.index,
+            colorscale="RdBu",
+            zmid=0.0,
+            colorbar={"title": "corr"},
+            hovertemplate="%{y}<br>%{x}<br>corr=%{z:.4f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="future return horizon")
+    fig.update_yaxes(title="")
+    return apply_mc_chart_layout(fig, "Residual Mispricing vs Future Option Move", height=380)
+
+
+def p4_r3_underlying_option_lag_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Underlying vs Voucher Lead-Lag", height=380)
+
+    pivot = frame.pivot(index="voucher", columns="lag", values="corr").sort_index()
+    fig.add_trace(
+        go.Heatmap(
+            z=pivot.values,
+            x=pivot.columns.astype(int),
+            y=pivot.index,
+            colorscale="RdBu",
+            zmid=0.0,
+            colorbar={"title": "corr"},
+            hovertemplate="%{y}<br>lag=%{x}<br>corr=%{z:.4f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="lag (underlying return vs option return)")
+    fig.update_yaxes(title="")
+    return apply_mc_chart_layout(fig, "Underlying vs Voucher Lead-Lag", height=400)
+
+
+def p4_r3_voucher_sync_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if frame.empty:
+        return apply_mc_chart_layout(fig, "Voucher Quote Synchronization", height=360)
+
+    for column, label, color in [
+        ("spread_mode_share", "Same spread share", "#5dade2"),
+        ("size_mode_share", "Same L1 size share", "#f4a261"),
+        ("quote_change_share", "Synchronized quote changes", "#59c17a"),
+    ]:
+        fig.add_trace(
+            go.Scatter(
+                x=frame["timestamp"],
+                y=frame[column],
+                mode="lines",
+                name=label,
+                line={"width": 2.2, "color": color},
+                hovertemplate="t=%{x}<br>share=%{y:.3f}<extra></extra>",
+            )
+        )
+    fig.update_xaxes(title="timestamp")
+    fig.update_yaxes(title="share of active voucher strikes")
+    return apply_mc_chart_layout(fig, "Voucher Quote Synchronization", height=380)
+
+
+def p4_r3_voucher_corr_heatmap(corr: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if corr.empty:
+        return apply_mc_chart_layout(fig, "Cross-Strike Imbalance Correlation", height=360)
+
+    ordered = [label for label in [f"VEV_{strike}" for strike in P4_R3_VOUCHER_STRIKES] if label in corr.index]
+    corr = corr.loc[ordered, ordered]
+    fig.add_trace(
+        go.Heatmap(
+            z=corr.values,
+            x=corr.columns,
+            y=corr.index,
+            colorscale="Viridis",
+            zmin=-1.0,
+            zmax=1.0,
+            colorbar={"title": "corr"},
+            hovertemplate="%{y} vs %{x}<br>corr=%{z:.4f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="")
+    fig.update_yaxes(title="")
+    return apply_mc_chart_layout(fig, "Cross-Strike Imbalance Correlation", height=400)
+
+
+def p4_r3_manual_penalty_multiplier(second_bid: float, estimated_mu: float) -> float:
+    if second_bid > estimated_mu:
+        return 1.0
+    denominator = P4_R3_MANUAL_RESALE_PRICE - second_bid
+    numerator = P4_R3_MANUAL_RESALE_PRICE - estimated_mu
+    if denominator <= 0:
+        return 1.0
+    return float((numerator / denominator) ** 3)
+
+
+def p4_r3_manual_metrics(first_bid: float, second_bid: float, estimated_mu: float) -> dict[str, float]:
+    reserves = P4_R3_MANUAL_RESERVE_VALUES
+    penalty = p4_r3_manual_penalty_multiplier(second_bid, estimated_mu)
+    first_mask = first_bid > reserves
+    second_mask = (~first_mask) & (second_bid > reserves)
+    first_fill_count = int(first_mask.sum())
+    second_fill_count = int(second_mask.sum())
+    first_profit = first_fill_count * (P4_R3_MANUAL_RESALE_PRICE - first_bid)
+    second_profit = second_fill_count * (P4_R3_MANUAL_RESALE_PRICE - second_bid) * penalty
+    total_count = len(reserves)
+    return {
+        "penalty": penalty,
+        "first_fill_count": first_fill_count,
+        "second_fill_count": second_fill_count,
+        "first_fill_share": first_fill_count / total_count,
+        "second_fill_share": second_fill_count / total_count,
+        "combined_fill_share": (first_fill_count + second_fill_count) / total_count,
+        "expected_pnl_per_counterparty": (first_profit + second_profit) / total_count,
+        "first_profit": first_profit / total_count,
+        "second_profit": second_profit / total_count,
+    }
+
+
+def p4_r3_manual_second_bid_curve(first_bid: float, estimated_mu: float) -> go.Figure:
+    second_bids = np.arange(670, 921, 5, dtype=float)
+    expected_pnls = []
+    penalties = []
+    for second_bid in second_bids:
+        metrics = p4_r3_manual_metrics(first_bid, float(second_bid), estimated_mu)
+        expected_pnls.append(metrics["expected_pnl_per_counterparty"])
+        penalties.append(metrics["penalty"])
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=second_bids,
+            y=expected_pnls,
+            mode="lines",
+            name="Expected PnL",
+            line={"color": "#6ccf9c", "width": 3},
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=second_bids,
+            y=penalties,
+            mode="lines",
+            name="Penalty multiplier",
+            line={"color": "#f4a261", "width": 2, "dash": "dot"},
+        ),
+        secondary_y=True,
+    )
+    fig.add_vline(
+        x=float(estimated_mu),
+        line={"color": "#b8c0ff", "dash": "dash", "width": 1.5},
+        annotation_text=f"mu ≈ {estimated_mu:.0f}",
+        annotation_position="top right",
+    )
+    fig.update_xaxes(title="Second bid")
+    fig.update_yaxes(title="Expected PnL per counterparty", secondary_y=False)
+    fig.update_yaxes(title="Penalty multiplier", secondary_y=True)
+    return apply_mc_chart_layout(fig, "Manual Round 3: Second-Bid Curve", height=390)
+
+
+def render_p4_r3_manual_bid_panel() -> None:
+    st.markdown(
+        """
+        <div class="mc-panel">
+          <div class="mc-section-title">Manual Challenge: Celestial Gardeners’ Guild</div>
+          <div class="mc-note">
+            This panel treats reserve prices as <b>uniform on 670, 675, ..., 920</b>. The first bid fills everyone below it at <b>b1</b>. The second bid fills the remaining reserves below <b>b2</b>,
+            but if <b>b2 ≤ μ</b> the per-trade PnL is penalized by <b>((920 − μ) / (920 − b2))³</b>. The output below is the expected profit
+            <b>per counterparty</b>, so multiply by your believed number of guild members if you want a rough total.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    controls, charts = st.columns([1.0, 1.35], gap="medium")
+    with controls:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Assumptions</div>', unsafe_allow_html=True)
+        first_bid = st.number_input(
+            "First bid (b1)",
+            min_value=670.0,
+            max_value=920.0,
+            value=float(st.session_state.get("p4_r3_manual_b1_input", 780.0)),
+            step=1.0,
+            key="p4_r3_manual_b1_input",
+        )
+        second_seed = max(float(first_bid), float(st.session_state.get("p4_r3_manual_b2_input", 862.0)))
+        if second_seed != float(st.session_state.get("p4_r3_manual_b2_input", second_seed)):
+            st.session_state["p4_r3_manual_b2_input"] = second_seed
+        second_bid = st.number_input(
+            "Second bid (b2)",
+            min_value=float(first_bid),
+            max_value=920.0,
+            value=float(st.session_state.get("p4_r3_manual_b2_input", second_seed)),
+            step=1.0,
+            key="p4_r3_manual_b2_input",
+        )
+        estimated_mu = st.slider(
+            "Estimated crowd mean of second bids (μ)",
+            836,
+            900,
+            int(P4_R3_MANUAL_ESTIMATED_MU),
+            step=1,
+            key="p4_r3_manual_mu",
+        )
+        metrics = p4_r3_manual_metrics(float(first_bid), float(second_bid), float(estimated_mu))
+        mc_card("Estimated μ", f"{estimated_mu:.0f}", "Current crowd-average second-bid assumption.")
+        mc_card("Penalty multiplier", f"{metrics['penalty']:.3f}", "Equals 1.0 whenever b2 is above μ.")
+        mc_card(
+            "Expected PnL / counterparty",
+            fmt_money(metrics["expected_pnl_per_counterparty"], 2),
+            f"First leg {fmt_money(metrics['first_profit'], 2)} · second leg {fmt_money(metrics['second_profit'], 2)}",
+        )
+        mc_card(
+            "Combined fill share",
+            f"{metrics['combined_fill_share']:.1%}",
+            f"First {metrics['first_fill_share']:.1%} · second {metrics['second_fill_share']:.1%}",
+        )
+        mc_card(
+            "Expected PnL for 50 counterparties",
+            fmt_money(50.0 * metrics["expected_pnl_per_counterparty"], 2),
+            "Scale the per-counterparty edge by your own guess for the guild size.",
+        )
+        st.caption("You can type any bid value. Reserve prices are still modeled on the true 5-point support grid.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with charts:
+        st.plotly_chart(
+            p4_r3_manual_second_bid_curve(float(first_bid), float(estimated_mu)),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+        reserve_frame = pd.DataFrame({"Reserve price": P4_R3_MANUAL_RESERVE_VALUES})
+        first_mask = first_bid > reserve_frame["Reserve price"]
+        second_mask = (~first_mask) & (second_bid > reserve_frame["Reserve price"])
+        reserve_frame["Route"] = np.where(first_mask, "First bid", np.where(second_mask, "Second bid", "No trade"))
+        reserve_frame["Per-counterparty PnL"] = np.where(
+            first_mask,
+            P4_R3_MANUAL_RESALE_PRICE - first_bid,
+            np.where(
+                second_mask,
+                (P4_R3_MANUAL_RESALE_PRICE - second_bid)
+                * p4_r3_manual_penalty_multiplier(float(second_bid), float(estimated_mu)),
+                0.0,
+            ),
+        )
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Reserve-by-Reserve Breakdown</div>', unsafe_allow_html=True)
+        mc_table(reserve_frame)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+@st.cache_data(show_spinner=False)
+def load_p3_r3_option_market() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if not P3_ROUND3_DATA_DIR.exists():
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    files = discover_files(str(P3_ROUND3_DATA_DIR))
+    prices = load_prices(files.price_paths)
+    trades = load_trades(files.trade_paths)
+
+    volcanic_prices = prices[prices["product"].isin((P3_R3_UNDERLYING, *P3_R3_OPTION_PRODUCTS))].copy()
+    if volcanic_prices.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    options = volcanic_prices[volcanic_prices["product"].isin(P3_R3_OPTION_PRODUCTS)].copy()
+    options["strike"] = (
+        options["product"].str.extract(r"(\d+)$").iloc[:, 0].astype(float)
+    )
+    options["option_wall_mid"] = options["mid_price"]
+    ask_only = options["option_wall_mid"].isna() & options["ask_price_1"].notna()
+    bid_only = options["option_wall_mid"].isna() & options["bid_price_1"].notna()
+    options.loc[ask_only, "option_wall_mid"] = options.loc[ask_only, "ask_price_1"] - 0.5
+    options.loc[bid_only, "option_wall_mid"] = options.loc[bid_only, "bid_price_1"] + 0.5
+
+    underlying = volcanic_prices[volcanic_prices["product"] == P3_R3_UNDERLYING].copy()
+    underlying["underlying_wall_mid"] = underlying["mid_price"]
+    ask_only = underlying["underlying_wall_mid"].isna() & underlying["ask_price_1"].notna()
+    bid_only = underlying["underlying_wall_mid"].isna() & underlying["bid_price_1"].notna()
+    underlying.loc[ask_only, "underlying_wall_mid"] = underlying.loc[ask_only, "ask_price_1"] - 0.5
+    underlying.loc[bid_only, "underlying_wall_mid"] = underlying.loc[bid_only, "bid_price_1"] + 0.5
+
+    columns = [
+        "day",
+        "timestamp",
+        "bid_price_1",
+        "ask_price_1",
+        "underlying_wall_mid",
+        "source_file",
+        "session_label",
+    ]
+    options = options.merge(
+        underlying[columns].rename(
+            columns={
+                "bid_price_1": "underlying_bid_1",
+                "ask_price_1": "underlying_ask_1",
+            }
+        ),
+        on=["day", "timestamp"],
+        how="left",
+    )
+
+    volcanic_trades = trades[trades["symbol"].isin((P3_R3_UNDERLYING, *P3_R3_OPTION_PRODUCTS))].copy()
+    volcanic_trades["strike"] = (
+        volcanic_trades["symbol"].str.extract(r"(\d+)$").iloc[:, 0].astype(float)
+    )
+    return options, underlying, volcanic_trades
+
+
+@st.cache_data(show_spinner=False)
+def build_p3_r3_option_analysis(
+    selected_day: int,
+    days_to_expiry_open: float,
+    extrinsic_floor: float,
+    fit_mode: str,
+    scatter_points_per_strike: int,
+    random_sample_count: int,
+    max_lag: int,
+) -> dict[str, object]:
+    options_raw, underlying_raw, trades_raw = load_p3_r3_option_market()
+    if options_raw.empty or underlying_raw.empty:
+        return {
+            "options": pd.DataFrame(),
+            "underlying": pd.DataFrame(),
+            "focus": pd.DataFrame(),
+            "focus_trades": pd.DataFrame(),
+            "scatter": pd.DataFrame(),
+            "insight_table": pd.DataFrame(),
+            "published_coeffs": P3_R3_FRANKFURT_SMILE_COEFFS,
+            "dynamic_coeffs": P3_R3_FRANKFURT_SMILE_COEFFS,
+            "acf_frame": pd.DataFrame(),
+        }
+
+    options = options_raw[options_raw["day"] == selected_day].copy().sort_values(["product", "timestamp"])
+    underlying = underlying_raw[underlying_raw["day"] == selected_day].copy().sort_values("timestamp")
+    trades = trades_raw[trades_raw["day"] == selected_day].copy().sort_values(["symbol", "timestamp"])
+
+    options["tau"] = (
+        (float(days_to_expiry_open) - options["day"] - options["timestamp"] / 1_000_000.0)
+        .clip(lower=1e-4)
+        / 365.0
+    )
+    options["intrinsic"] = np.maximum(options["underlying_wall_mid"] - options["strike"], 0.0)
+    options["extrinsic"] = options["option_wall_mid"] - options["intrinsic"]
+    options["moneyness"] = np.log(options["strike"] / options["underlying_wall_mid"]) / np.sqrt(options["tau"])
+    options["market_iv"] = [
+        p3_r3_implied_volatility(spot, strike, tau, price)
+        for spot, strike, tau, price in zip(
+            options["underlying_wall_mid"],
+            options["strike"],
+            options["tau"],
+            options["option_wall_mid"],
+        )
+    ]
+
+    fit_mask = (
+        options["market_iv"].notna()
+        & options["moneyness"].notna()
+        & options["extrinsic"].ge(float(extrinsic_floor))
+        & options["market_iv"].between(0.05, 1.00)
+    )
+    if int(fit_mask.sum()) >= 15:
+        dynamic_coeffs = np.polyfit(
+            options.loc[fit_mask, "moneyness"],
+            options.loc[fit_mask, "market_iv"],
+            2,
+        )
+    else:
+        dynamic_coeffs = P3_R3_FRANKFURT_SMILE_COEFFS.copy()
+
+    published_poly = np.poly1d(P3_R3_FRANKFURT_SMILE_COEFFS)
+    dynamic_poly = np.poly1d(dynamic_coeffs)
+    options["fair_iv_published"] = published_poly(options["moneyness"])
+    options["fair_iv_dynamic"] = dynamic_poly(options["moneyness"])
+    if fit_mode == "Published Frankfurt fit":
+        options["fair_iv"] = options["fair_iv_published"]
+    else:
+        options["fair_iv"] = options["fair_iv_dynamic"]
+    options["fair_iv"] = pd.to_numeric(options["fair_iv"], errors="coerce").clip(lower=0.05, upper=1.20)
+
+    metrics = [
+        p3_r3_bs_call_metrics(float(spot), float(strike), float(tau), float(sigma))
+        if pd.notna(spot) and pd.notna(strike) and pd.notna(tau) and pd.notna(sigma)
+        else (float("nan"), float("nan"), float("nan"), float("nan"))
+        for spot, strike, tau, sigma in zip(
+            options["underlying_wall_mid"],
+            options["strike"],
+            options["tau"],
+            options["fair_iv"],
+        )
+    ]
+    options["fair_price"] = [item[0] for item in metrics]
+    options["delta"] = [item[1] for item in metrics]
+    options["gamma"] = [item[2] for item in metrics]
+    options["vega"] = [item[3] for item in metrics]
+    options["iv_deviation"] = options["market_iv"] - options["fair_iv"]
+    options["price_deviation"] = options["option_wall_mid"] - options["fair_price"]
+
+    grouped = options.groupby("product", sort=False)["price_deviation"]
+    options["mean_theo_diff"] = grouped.transform(
+        lambda series: series.ewm(span=P3_R3_THEO_NORM_WINDOW, adjust=False, min_periods=1).mean()
+    )
+    options["switch_mean"] = options.groupby("product", sort=False).apply(
+        lambda frame: (
+            (frame["price_deviation"] - frame["mean_theo_diff"]).abs()
+            .ewm(span=P3_R3_IV_SCALPING_WINDOW, adjust=False, min_periods=1)
+            .mean()
+        )
+    ).reset_index(level=0, drop=True)
+    options["scalper_on"] = options["switch_mean"] >= P3_R3_IV_SCALPING_THR
+    options["low_vega_adj"] = np.where(options["vega"] <= 1.0, P3_R3_LOW_VEGA_THR_ADJ, 0.0)
+    options["bid_signal"] = options["bid_price_1"] - options["fair_price"] - options["mean_theo_diff"]
+    options["ask_signal"] = options["ask_price_1"] - options["fair_price"] - options["mean_theo_diff"]
+    options["would_sell"] = options["scalper_on"] & (options["bid_signal"] >= (P3_R3_THR_OPEN + options["low_vega_adj"]))
+    options["would_buy"] = options["scalper_on"] & (options["ask_signal"] <= -(P3_R3_THR_OPEN + options["low_vega_adj"]))
+    options["normalized_deviation_pct"] = 100.0 * options["price_deviation"] / options["fair_price"].replace(0, pd.NA)
+
+    scatter_parts: list[pd.DataFrame] = []
+    for product, frame in options.groupby("product", sort=False):
+        valid = frame[fit_mask.loc[frame.index]].copy()
+        if valid.empty:
+            continue
+        sample_n = min(int(scatter_points_per_strike), len(valid))
+        if sample_n <= 0:
+            continue
+        scatter_parts.append(valid.sample(sample_n, random_state=7))
+    scatter = pd.concat(scatter_parts, ignore_index=True) if scatter_parts else pd.DataFrame()
+
+    insight_table = (
+        options.groupby("product", sort=False)
+        .agg(
+            Strike=("strike", "first"),
+            Mean_IV_Dev=("iv_deviation", "mean"),
+            Price_Dev_SD=("price_deviation", "std"),
+            Mean_Abs_Price_Dev=("price_deviation", lambda series: series.abs().mean()),
+            Scalp_On_Pct=("scalper_on", "mean"),
+            Avg_Vega=("vega", "mean"),
+        )
+        .reset_index()
+        .rename(columns={"product": "Voucher"})
+    )
+    if not insight_table.empty:
+        insight_table["Mean_IV_Dev"] = insight_table["Mean_IV_Dev"].map(lambda value: f"{float(value):+.4f}")
+        insight_table["Price_Dev_SD"] = insight_table["Price_Dev_SD"].map(lambda value: fmt_number(value, 3))
+        insight_table["Mean_Abs_Price_Dev"] = insight_table["Mean_Abs_Price_Dev"].map(lambda value: fmt_number(value, 3))
+        insight_table["Scalp_On_Pct"] = insight_table["Scalp_On_Pct"].map(lambda value: f"{100.0 * float(value):.1f}%")
+        insight_table["Avg_Vega"] = insight_table["Avg_Vega"].map(lambda value: fmt_number(value, 3))
+        insight_table["Strike"] = insight_table["Strike"].map(lambda value: f"{int(value)}")
+
+    returns = pd.to_numeric(underlying["underlying_wall_mid"], errors="coerce").diff().dropna().to_numpy()
+    acf_rows: list[dict[str, float | int | str]] = []
+    if len(returns) > max_lag + 5:
+        centered = returns - returns.mean()
+        denom = float(np.dot(centered, centered))
+        lags = range(1, int(max_lag) + 1)
+        for lag in lags:
+            if lag >= len(centered):
+                break
+            numer = float(np.dot(centered[:-lag], centered[lag:]))
+            acf_rows.append({"lag": lag, "value": numer / denom if denom else 0.0, "series": "VOLCANIC_ROCK"})
+        rng = np.random.default_rng(11)
+        scale = float(np.std(returns)) if float(np.std(returns)) > 0 else 1.0
+        for sample_id in range(int(random_sample_count)):
+            sample = rng.normal(0.0, scale, len(returns))
+            sample = sample - sample.mean()
+            sample_denom = float(np.dot(sample, sample))
+            for lag in lags:
+                if lag >= len(sample):
+                    break
+                numer = float(np.dot(sample[:-lag], sample[lag:]))
+                acf_rows.append(
+                    {
+                        "lag": lag,
+                        "value": numer / sample_denom if sample_denom else 0.0,
+                        "series": f"random_{sample_id + 1}",
+                    }
+                )
+    acf_frame = pd.DataFrame(acf_rows)
+
+    return {
+        "options": options,
+        "underlying": underlying,
+        "trades": trades,
+        "scatter": scatter,
+        "insight_table": insight_table,
+        "published_coeffs": P3_R3_FRANKFURT_SMILE_COEFFS,
+        "dynamic_coeffs": dynamic_coeffs,
+        "acf_frame": acf_frame,
+    }
 
 
 def nearest_book_for_trades(product_prices: pd.DataFrame, product_trades: pd.DataFrame) -> pd.DataFrame:
@@ -538,6 +1998,7 @@ def install_style() -> None:
             border-collapse: collapse;
             color: #d3d6dc;
             font-size: 0.82rem;
+            table-layout: fixed;
             width: 100%;
         }
         .mc-table th {
@@ -545,13 +2006,17 @@ def install_style() -> None:
             border: 1px solid #303640;
             color: #c9cdd5;
             font-weight: 800;
+            overflow-wrap: anywhere;
             padding: 0.48rem 0.55rem;
             text-align: left;
+            vertical-align: top;
         }
         .mc-table td {
             background: #15181d;
             border: 1px solid #303640;
+            overflow-wrap: anywhere;
             padding: 0.45rem 0.55rem;
+            vertical-align: top;
         }
         .mc-table tr:nth-child(even) td {
             background: #20242b;
@@ -1847,6 +3312,145 @@ def run_uploaded_submission_report(
     return result.trace, result.summary, result.daily, result.product_pnl, result.stats
 
 
+def submission_code_hash(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:12]
+
+
+def submission_safe_name(name: str) -> str:
+    stem = Path(name).stem
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    return cleaned or "submission"
+
+
+def submission_family_name(name: str) -> str:
+    stem = submission_safe_name(name)
+    parts = [part for part in stem.split("_") if part]
+    if not parts:
+        return "submission"
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return "_".join(parts)
+    return "_".join(parts[:3])
+
+
+def load_submission_history() -> list[dict[str, object]]:
+    if not SUBMISSION_HISTORY_FILE.exists():
+        return []
+    try:
+        raw = json.loads(SUBMISSION_HISTORY_FILE.read_text())
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [entry for entry in raw if isinstance(entry, dict)]
+
+
+def save_submission_history(entries: list[dict[str, object]]) -> None:
+    SUBMISSION_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    SUBMISSION_HISTORY_CODE_DIR.mkdir(parents=True, exist_ok=True)
+    SUBMISSION_HISTORY_FILE.write_text(json.dumps(entries, indent=2))
+
+
+def record_submission_history(
+    *,
+    event_id: str,
+    submitted_name: str,
+    submitted_code: str,
+    dataset_label: str,
+    normalization_ticks: int,
+    total_pnl: float,
+    mean_pnl: float,
+    sd_pnl: float,
+    own_trades: int,
+    day_count: int,
+) -> None:
+    if not event_id:
+        return
+    entries = load_submission_history()
+    if any(str(entry.get("event_id", "")) == str(event_id) for entry in entries):
+        return
+
+    SUBMISSION_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    SUBMISSION_HISTORY_CODE_DIR.mkdir(parents=True, exist_ok=True)
+
+    digest = submission_code_hash(submitted_code)
+    safe_name = submission_safe_name(submitted_name)
+    timestamp_ns = time.time_ns()
+    snapshot_name = f"{timestamp_ns}_{safe_name}_{digest}.py"
+    snapshot_path = SUBMISSION_HISTORY_CODE_DIR / snapshot_name
+    snapshot_path.write_text(submitted_code)
+
+    entries.append(
+        {
+            "event_id": str(event_id),
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            "submitted_name": submitted_name,
+            "dataset_label": dataset_label,
+            "normalization_ticks": int(normalization_ticks),
+            "total_pnl": float(total_pnl),
+            "mean_pnl": float(mean_pnl),
+            "sd_pnl": float(sd_pnl),
+            "own_trades": int(own_trades),
+            "day_count": int(day_count),
+            "code_hash": digest,
+            "code_path": str(snapshot_path),
+        }
+    )
+    entries.sort(key=lambda entry: str(entry.get("created_at", "")), reverse=True)
+    save_submission_history(entries)
+
+
+def submission_history_dataframe(
+    normalization_ticks: int,
+    dataset_label: str | None = None,
+) -> pd.DataFrame:
+    rows = []
+    for entry in load_submission_history():
+        if int(entry.get("normalization_ticks", -1)) != int(normalization_ticks):
+            continue
+        if dataset_label is not None and str(entry.get("dataset_label", "")) != dataset_label:
+            continue
+        rows.append(
+            {
+                "When": str(entry.get("created_at", "")),
+                "File": str(entry.get("submitted_name", "")),
+                "Dataset": str(entry.get("dataset_label", "")),
+                "Total PnL": float(entry.get("total_pnl", 0.0)),
+                "Mean PnL": float(entry.get("mean_pnl", 0.0)),
+                "1σ": float(entry.get("sd_pnl", 0.0)),
+                "Trades": int(entry.get("own_trades", 0)),
+                "Days": int(entry.get("day_count", 0)),
+                "Hash": str(entry.get("code_hash", "")),
+                "Code path": str(entry.get("code_path", "")),
+                "Family": submission_family_name(str(entry.get("submitted_name", ""))),
+            }
+        )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    return frame.sort_values(["Total PnL", "When"], ascending=[False, False]).reset_index(drop=True)
+
+
+def submission_family_leaderboard(history: pd.DataFrame) -> pd.DataFrame:
+    if history.empty:
+        return pd.DataFrame()
+    grouped = (
+        history.groupby("Family", dropna=False)
+        .agg(
+            Best_PnL=("Total PnL", "max"),
+            Mean_PnL=("Total PnL", "mean"),
+            Runs=("Total PnL", "size"),
+            Best_File=("File", "first"),
+            Latest_When=("When", "max"),
+        )
+        .reset_index()
+        .sort_values(["Best_PnL", "Runs"], ascending=[False, False])
+        .reset_index(drop=True)
+    )
+    return grouped
+
+
 def submission_daily_pnl_chart(daily: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     if daily.empty:
@@ -2589,6 +4193,46 @@ def normal_cdf(value: float, mean: float, std: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
 
+def empirical_speed_stats(speed_pct: float, counts: list[int] | tuple[int, ...] = ACTUAL_R2_SPEED_COUNTS) -> dict[str, float]:
+    if not counts:
+        return {
+            "speed_pct": speed_pct,
+            "speed_int": 0,
+            "count": 0.0,
+            "field_size": 0.0,
+            "pct_exact": 0.0,
+            "pct_below": 0.0,
+            "pct_at_or_below": 0.0,
+            "pct_above": 0.0,
+            "pct_at_or_above": 0.0,
+            "multiplier_below": 0.1,
+            "multiplier_at_or_below": 0.1,
+        }
+    speed_int = min(max(int(round(speed_pct)), 0), len(counts) - 1)
+    field_size = float(sum(counts))
+    below = float(sum(counts[:speed_int]))
+    at = float(counts[speed_int])
+    at_or_below = below + at
+    pct_exact = at / field_size if field_size > 0 else 0.0
+    pct_below = below / field_size if field_size > 0 else 0.0
+    pct_at_or_below = at_or_below / field_size if field_size > 0 else 0.0
+    pct_above = 1.0 - pct_at_or_below
+    pct_at_or_above = 1.0 - pct_below
+    return {
+        "speed_pct": speed_pct,
+        "speed_int": speed_int,
+        "count": at,
+        "field_size": field_size,
+        "pct_exact": pct_exact,
+        "pct_below": pct_below,
+        "pct_at_or_below": pct_at_or_below,
+        "pct_above": pct_above,
+        "pct_at_or_above": pct_at_or_above,
+        "multiplier_below": 0.1 + 0.8 * pct_below,
+        "multiplier_at_or_below": 0.1 + 0.8 * pct_at_or_below,
+    }
+
+
 def investment_budget_used(research_pct: float, scale_pct: float, speed_pct: float) -> float:
     return 50_000.0 * (research_pct + scale_pct + speed_pct) / 100.0
 
@@ -2884,6 +4528,3764 @@ def speed_mu_pnl_chart(selected_speed_pct: float, mu: float, std: float) -> go.F
     return apply_mc_chart_layout(fig, title, height=370)
 
 
+def empirical_speed_percentile_chart(selected_speed_pct: float) -> go.Figure:
+    speeds = list(range(len(ACTUAL_R2_SPEED_COUNTS)))
+    total = max(1, sum(ACTUAL_R2_SPEED_COUNTS))
+    shares = [100.0 * count / total for count in ACTUAL_R2_SPEED_COUNTS]
+    selected_speed = min(max(int(round(selected_speed_pct)), 0), len(ACTUAL_R2_SPEED_COUNTS) - 1)
+    selected_stats = empirical_speed_stats(selected_speed)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=speeds,
+            y=shares,
+            name="Actual crowd share",
+            marker={"color": "#5b7cfa", "line": {"color": "#aab7ff", "width": 0.6}},
+            hovertemplate="Speed %{x}<br>Share %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_vline(
+        x=selected_speed,
+        line={"color": "#e15759", "width": 2.6, "dash": "dash"},
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[selected_speed],
+            y=[shares[selected_speed]],
+            mode="markers",
+            name="Selected speed",
+            marker={"color": "#e15759", "size": 11, "symbol": "diamond"},
+            customdata=[[
+                selected_stats["pct_below"] * 100.0,
+                selected_stats["pct_at_or_below"] * 100.0,
+                int(selected_stats["count"]),
+            ]],
+            hovertemplate=(
+                "Speed %{x}<br>"
+                "Share %{y:.2f}%<br>"
+                "Below percentile %{customdata[0]:.1f}%<br>"
+                "At or below %{customdata[1]:.1f}%<br>"
+                "Exact count %{customdata[2]}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_annotation(
+        x=selected_speed,
+        y=max(shares) * 1.02 if shares else 0.0,
+        text=f"Speed {selected_speed}",
+        showarrow=False,
+        font={"size": 12, "color": "#e15759"},
+        bgcolor="rgba(21,24,29,0.85)",
+    )
+    fig.update_xaxes(title="Speed %", range=[-0.5, len(speeds) - 0.5])
+    fig.update_yaxes(title="Actual crowd share (%)")
+    return apply_mc_chart_layout(fig, "Actual 2026 Speed Distribution", height=360)
+
+
+def empirical_speed_pnl_chart(selected_speed_pct: float) -> go.Figure:
+    speeds = list(range(0, 101))
+    pnls: list[float] = []
+    for speed in speeds:
+        stats = empirical_speed_stats(speed)
+        remaining = max(0.0, 100.0 - float(speed))
+        research_pct, scale_pct, edge_value = optimal_research_scale_split(remaining)
+        gross = edge_value * stats["multiplier_below"]
+        pnl = gross - investment_budget_used(research_pct, scale_pct, float(speed))
+        pnls.append(float(pnl))
+
+    selected_speed = min(max(int(round(selected_speed_pct)), 0), 100)
+    selected_pnl = pnls[selected_speed]
+    selected_stats = empirical_speed_stats(selected_speed)
+    selected_remaining = max(0.0, 100.0 - float(selected_speed))
+    selected_research, selected_scale, _ = optimal_research_scale_split(selected_remaining)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=speeds,
+            y=pnls,
+            mode="lines",
+            name="Empirical PnL",
+            line={"color": "#6ccf9c", "width": 2.8},
+            hovertemplate="Speed %{x}<br>PnL %{y:,.0f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[selected_speed],
+            y=[selected_pnl],
+            mode="markers",
+            name="Selected speed",
+            marker={"color": "#e15759", "size": 12, "symbol": "diamond"},
+            customdata=[[
+                selected_stats["pct_below"] * 100.0,
+                selected_research,
+                selected_scale,
+            ]],
+            hovertemplate=(
+                "Speed %{x}<br>"
+                "PnL %{y:,.0f}<br>"
+                "Empirical percentile %{customdata[0]:.1f}%<br>"
+                "R %{customdata[1]:.1f}% · S %{customdata[2]:.1f}%<extra></extra>"
+            ),
+        )
+    )
+    fig.update_xaxes(title="Speed %", range=[0, 100])
+    fig.update_yaxes(title="PnL")
+    return apply_mc_chart_layout(fig, "Actual 2026 Speed vs PnL", height=360)
+
+
+def p3_container_base_frame() -> pd.DataFrame:
+    rows = [
+        {"multiplier": 10, "inhabitants": 1, "nash_density": 1.84, "actual_density": 1.0},
+        {"multiplier": 17, "inhabitants": 1, "nash_density": 3.83, "actual_density": 7.5},
+        {"multiplier": 20, "inhabitants": 2, "nash_density": 3.68, "actual_density": 1.7},
+        {"multiplier": 31, "inhabitants": 2, "nash_density": 6.80, "actual_density": 7.0},
+        {"multiplier": 37, "inhabitants": 3, "nash_density": 7.50, "actual_density": 5.0},
+        {"multiplier": 50, "inhabitants": 4, "nash_density": 10.18, "actual_density": 8.5},
+        {"multiplier": 73, "inhabitants": 4, "nash_density": 16.71, "actual_density": 24.0},
+        {"multiplier": 80, "inhabitants": 6, "nash_density": 16.69, "actual_density": 18.0},
+        {"multiplier": 89, "inhabitants": 8, "nash_density": 17.24, "actual_density": 15.0},
+        {"multiplier": 90, "inhabitants": 10, "nash_density": 15.53, "actual_density": 12.0},
+    ]
+    frame = pd.DataFrame(rows)
+    frame["actual_density"] = 100.0 * frame["actual_density"] / frame["actual_density"].sum()
+    return frame
+
+
+def p3_container_payoff(multiplier: pd.Series | float, density_percent: pd.Series | float, inhabitants: pd.Series | float) -> pd.Series | float:
+    return pd.to_numeric(multiplier, errors="coerce") * 10_000.0 / (
+        pd.to_numeric(density_percent, errors="coerce") + pd.to_numeric(inhabitants, errors="coerce")
+    )
+
+
+def p3_strict_rank(
+    values: pd.Series | list[float],
+    tie_break: pd.Series | list[float],
+    *,
+    value_ascending: bool,
+    tie_break_desc: bool = True,
+) -> pd.Series:
+    rank_frame = pd.DataFrame(
+        {
+            "value": pd.to_numeric(values, errors="coerce"),
+            "tie_break": pd.to_numeric(tie_break, errors="coerce"),
+        }
+    ).reset_index()
+    rank_frame = rank_frame.sort_values(
+        ["value", "tie_break"],
+        ascending=[value_ascending, not tie_break_desc],
+    )
+    rank_frame["rank"] = np.arange(1, len(rank_frame) + 1, dtype=int)
+    ranked = rank_frame.set_index("index")["rank"].sort_index()
+    return pd.Series(ranked, dtype=int)
+
+
+def p3_first_order_payoff_frame() -> pd.DataFrame:
+    frame = p3_container_base_frame().copy()
+    multipliers = pd.to_numeric(frame["multiplier"], errors="coerce").astype(float)
+    inhabitants = pd.to_numeric(frame["inhabitants"], errors="coerce").astype(float)
+    total_multiplier = max(1.0, float(multipliers.sum()))
+    frame["island"] = range(len(frame))
+    frame["first_order_pf_percent"] = 100.0 * multipliers / total_multiplier
+    frame["first_order_denominator"] = frame["first_order_pf_percent"] + inhabitants
+    frame["first_order_payout_proxy"] = p3_container_payoff(
+        frame["multiplier"],
+        frame["first_order_pf_percent"],
+        frame["inhabitants"],
+    )
+    frame["first_order_rank_score"] = p3_strict_rank(
+        frame["first_order_payout_proxy"],
+        frame["multiplier"],
+        value_ascending=True,
+        tie_break_desc=True,
+    )
+    frame["first_order_rank"] = frame["first_order_rank_score"]
+    return frame
+
+
+def p3_first_order_rank_tuple() -> tuple[int, ...]:
+    frame = p3_first_order_payoff_frame()
+    return tuple(int(value) for value in frame["first_order_rank_score"].tolist())
+
+
+def p3_actual_payoff_rank_tuple() -> tuple[int, ...]:
+    frame = p3_container_base_frame().copy()
+    frame["actual_payout_proxy"] = p3_container_payoff(
+        frame["multiplier"],
+        frame["actual_density"],
+        frame["inhabitants"],
+    )
+    ranks = p3_strict_rank(
+        frame["actual_payout_proxy"],
+        frame["multiplier"],
+        value_ascending=False,
+        tie_break_desc=True,
+    )
+    return tuple(int(value) for value in ranks.tolist())
+
+
+def p3_known_ranking_inferred_frame(known_final_rank_tuple: tuple[int, ...] | None = None) -> pd.DataFrame:
+    frame = p3_first_order_payoff_frame().copy()
+    multipliers = pd.to_numeric(frame["multiplier"], errors="coerce").astype(float)
+    inhabitants = pd.to_numeric(frame["inhabitants"], errors="coerce").astype(float)
+    if known_final_rank_tuple is not None and len(known_final_rank_tuple) == len(frame):
+        frame["known_final_payoff_rank"] = pd.Series(
+            [int(value) for value in known_final_rank_tuple],
+            index=frame.index,
+            dtype=int,
+        )
+    else:
+        frame["known_final_payoff_rank"] = pd.to_numeric(
+            frame["first_order_rank_score"],
+            errors="coerce",
+        ).astype(int)
+    max_rank = int(frame["known_final_payoff_rank"].max())
+    frame["known_final_payoff_score"] = (max_rank - frame["known_final_payoff_rank"] + 1).astype(float)
+    scale = 10_000.0 * float((multipliers / frame["known_final_payoff_score"]).sum()) / (
+        100.0 + float(inhabitants.sum())
+    )
+    frame["rank_inferred_pf_percent"] = (
+        10_000.0 * multipliers / (scale * frame["known_final_payoff_score"])
+    ) - inhabitants
+    frame["rank_inferred_denominator"] = frame["rank_inferred_pf_percent"] + inhabitants
+    frame["rank_inferred_payout_proxy"] = p3_container_payoff(
+        frame["multiplier"],
+        frame["rank_inferred_pf_percent"],
+        frame["inhabitants"],
+    )
+    frame["rank_inferred_payoff_rank"] = pd.to_numeric(
+        frame["rank_inferred_payout_proxy"],
+        errors="coerce",
+    ).rank(ascending=False, method="dense").astype(int)
+    return frame
+
+
+def normalize_component(values: pd.Series | list[float]) -> pd.Series:
+    series = pd.Series(values, dtype=float)
+    series = series.clip(lower=0.0)
+    total = float(series.sum())
+    if total <= 0:
+        return pd.Series([100.0 / len(series)] * len(series))
+    return 100.0 * series / total
+
+
+def minmax_component(values: pd.Series | list[float]) -> pd.Series:
+    series = pd.Series(values, dtype=float)
+    spread = float(series.max() - series.min())
+    if spread <= 0:
+        return pd.Series([0.0] * len(series), dtype=float)
+    return (series - float(series.min())) / spread
+
+
+def centered_component(values: pd.Series | list[float]) -> pd.Series:
+    series = pd.Series(values, dtype=float)
+    spread = float(series.max() - series.min())
+    if spread <= 0:
+        return pd.Series([0.0] * len(series), dtype=float)
+    scaled = (series - float(series.min())) / spread
+    return scaled - float(scaled.mean())
+
+
+def softmax_density(logits: pd.Series | list[float]) -> pd.Series:
+    series = pd.Series(logits, dtype=float).clip(lower=-8.0, upper=8.0)
+    shifted = series - float(series.max())
+    scores = np.exp(shifted.to_numpy(dtype=float))
+    total = float(scores.sum())
+    if total <= 0:
+        return pd.Series([100.0 / len(series)] * len(series), dtype=float)
+    return pd.Series(100.0 * scores / total, index=series.index, dtype=float)
+
+
+def p3_digit_bias_scores(multipliers: pd.Series) -> list[float]:
+    digit_scores = []
+    for multiplier in multipliers:
+        if int(multiplier) == 37:
+            digit_scores.append(0.15)
+            continue
+        text = str(int(multiplier))
+        score = 0.25
+        if "3" in text:
+            score += 1.0
+        if "7" in text:
+            score += 1.0
+        if int(multiplier) == 73:
+            score += 1.75
+        digit_scores.append(score)
+    return digit_scores
+
+
+def p3_container_components(
+    high_number_exponent: float = 3.0,
+    known_final_rank_tuple: tuple[int, ...] | None = None,
+) -> pd.DataFrame:
+    frame = p3_container_base_frame()
+    first_order_frame = p3_first_order_payoff_frame()
+    known_rank_frame = p3_known_ranking_inferred_frame(known_final_rank_tuple)
+    multiplier_text = frame["multiplier"].astype(str)
+    multipliers = pd.to_numeric(frame["multiplier"], errors="coerce").astype(float)
+    inhabitants = pd.to_numeric(frame["inhabitants"], errors="coerce").astype(float)
+    digit_scores = p3_digit_bias_scores(frame["multiplier"])
+    factor_counts = multipliers.map(lambda value: divisor_count(int(value))).astype(float)
+    nash_payoff_proxy = p3_container_payoff(multipliers, frame["nash_density"], inhabitants)
+    first_order_payoff = pd.to_numeric(first_order_frame["first_order_payout_proxy"], errors="coerce").astype(float)
+    value_scores = multipliers / inhabitants.clip(lower=1.0)
+    famous_values = {10, 20, 37, 50, 90}
+    avoid_famous_scores = [
+        0.08 if int(multiplier) in famous_values else 1.0
+        for multiplier in frame["multiplier"]
+    ]
+    high_number_scores = np.exp(max(0.0, float(high_number_exponent)) * minmax_component(multipliers))
+
+    frame["value_feature"] = centered_component(multipliers / inhabitants.clip(lower=1.0))
+    frame["digit_feature"] = centered_component(digit_scores)
+    frame["special_73_feature"] = centered_component((multipliers == 73).astype(float))
+    frame["nash_payoff_feature"] = centered_component(nash_payoff_proxy)
+    frame["nash_payout_proxy"] = nash_payoff_proxy
+    frame["first_order_pf_percent"] = pd.to_numeric(first_order_frame["first_order_pf_percent"], errors="coerce").astype(float)
+    frame["first_order_denominator"] = pd.to_numeric(first_order_frame["first_order_denominator"], errors="coerce").astype(float)
+    frame["first_order_payout_proxy"] = first_order_payoff
+    frame["known_final_payoff_rank"] = pd.to_numeric(known_rank_frame["known_final_payoff_rank"], errors="coerce").astype(float)
+    frame["first_order_rank_score"] = pd.to_numeric(known_rank_frame["known_final_payoff_score"], errors="coerce").astype(float)
+    frame["rank_inferred_pf_percent"] = pd.to_numeric(known_rank_frame["rank_inferred_pf_percent"], errors="coerce").astype(float)
+    frame["rank_inferred_denominator"] = pd.to_numeric(known_rank_frame["rank_inferred_denominator"], errors="coerce").astype(float)
+    frame["rank_inferred_payout_proxy"] = pd.to_numeric(known_rank_frame["rank_inferred_payout_proxy"], errors="coerce").astype(float)
+    frame["rank_inferred_payoff_rank"] = pd.to_numeric(known_rank_frame["rank_inferred_payoff_rank"], errors="coerce").astype(float)
+    frame["nash_component"] = normalize_component(frame["nash_density"])
+    frame["high_number_component"] = normalize_component(high_number_scores)
+    frame["avoid_famous_component"] = normalize_component(avoid_famous_scores)
+    frame["random_component"] = normalize_component([1.0] * len(frame))
+    frame["nice_numbers_component"] = normalize_component(digit_scores)
+    frame["value_hunters_component"] = normalize_component(value_scores ** 1.2)
+    frame["first_order_pnl_component"] = normalize_component(frame["rank_inferred_pf_percent"])
+    frame["digit_component"] = normalize_component(digit_scores)
+    frame["factor_component"] = normalize_component(factor_counts)
+    frame["prime_component"] = normalize_component(
+        multipliers.map(lambda value: 1.0 if is_prime_number(int(value)) else 0.0)
+    )
+    frame["container"] = multiplier_text
+    return frame
+
+
+def p3_container_modeled_frame(
+    nash_weight: float,
+    high_number_weight: float,
+    avoid_famous_weight: float,
+    random_weight: float,
+    nice_numbers_weight: float,
+    value_hunters_weight: float,
+    first_order_pnl_weight: float,
+    high_number_exponent: float,
+    known_final_rank_tuple: tuple[int, ...] | None = None,
+) -> pd.DataFrame:
+    frame = p3_container_components(high_number_exponent, known_final_rank_tuple)
+    raw_weights = {
+        "nash": max(0.0, float(nash_weight)),
+        "high_number": max(0.0, float(high_number_weight)),
+        "avoid_famous": max(0.0, float(avoid_famous_weight)),
+        "random": max(0.0, float(random_weight)),
+        "nice_numbers": max(0.0, float(nice_numbers_weight)),
+        "value_hunters": max(0.0, float(value_hunters_weight)),
+        "first_order_pnl": max(0.0, float(first_order_pnl_weight)),
+    }
+    total_weight = float(sum(raw_weights.values()))
+    if total_weight <= 0:
+        raw_weights["random"] = 1.0
+        total_weight = 1.0
+
+    modeled_density = pd.Series([0.0] * len(frame), dtype=float)
+    for strategy, raw_weight in raw_weights.items():
+        normalized_weight = raw_weight / total_weight
+        frame[f"{strategy}_strategy_weight"] = normalized_weight * 100.0
+        frame[f"{strategy}_contribution"] = normalized_weight * frame[f"{strategy}_component"]
+        modeled_density += frame[f"{strategy}_contribution"]
+
+    frame["modeled_density"] = modeled_density
+    frame["model_score"] = frame["modeled_density"]
+    frame["model_error"] = frame["modeled_density"] - frame["actual_density"]
+    frame["absolute_error"] = frame["model_error"].abs()
+    frame["actual_payout_proxy"] = p3_container_payoff(frame["multiplier"], frame["actual_density"], frame["inhabitants"])
+    frame["modeled_payout_proxy"] = p3_container_payoff(frame["multiplier"], frame["modeled_density"], frame["inhabitants"])
+    frame["payoff_error"] = frame["modeled_payout_proxy"] - frame["actual_payout_proxy"]
+    return frame
+
+
+@st.cache_data(show_spinner=False)
+def p3_auto_fit_container_model(
+    enabled_strategies: tuple[str, ...] | None = None,
+    known_final_rank_tuple: tuple[int, ...] | None = None,
+    objective: str = "density",
+) -> dict[str, float]:
+    base = p3_container_base_frame()
+    target = pd.to_numeric(base["actual_density"], errors="coerce").to_numpy(dtype=float)
+    target = np.clip(target, 0.0001, None)
+    target = 100.0 * target / target.sum()
+    strategy_specs = [
+        ("nash", "nash_component", 15.0),
+        ("high_number", "high_number_component", 20.0),
+        ("avoid_famous", "avoid_famous_component", 10.0),
+        ("random", "random_component", 15.0),
+        ("nice_numbers", "nice_numbers_component", 20.0),
+        ("value_hunters", "value_hunters_component", 20.0),
+        ("first_order_pnl", "first_order_pnl_component", 15.0),
+    ]
+    if enabled_strategies is None:
+        enabled_names = set(name for name, _, _ in strategy_specs)
+    else:
+        enabled_names = set(enabled_strategies)
+    active_specs = [spec for spec in strategy_specs if spec[0] in enabled_names]
+    if not active_specs:
+        return {
+            "nash_weight": 0.0,
+            "high_number_weight": 0.0,
+            "avoid_famous_weight": 0.0,
+            "random_weight": 0.0,
+            "nice_numbers_weight": 0.0,
+            "value_hunters_weight": 0.0,
+            "first_order_pnl_weight": 0.0,
+            "high_number_exponent": 3.0,
+            "mae": 0.0,
+            "rmse": 0.0,
+            "score": 0.0,
+        }
+    prior = np.array([prior_value for _, _, prior_value in active_specs], dtype=float)
+    prior = prior / prior.sum()
+
+    def empty_weight_map() -> dict[str, float]:
+        return {
+            "nash_weight": 0.0,
+            "high_number_weight": 0.0,
+            "avoid_famous_weight": 0.0,
+            "random_weight": 0.0,
+            "nice_numbers_weight": 0.0,
+            "value_hunters_weight": 0.0,
+            "first_order_pnl_weight": 0.0,
+        }
+
+    def score_frame(frame: pd.DataFrame, weights: np.ndarray, objective_name: str) -> tuple[float, float, float]:
+        density_error = pd.to_numeric(frame["modeled_density"], errors="coerce") - pd.to_numeric(frame["actual_density"], errors="coerce")
+        density_mae = float(np.mean(np.abs(density_error)))
+        density_rmse = float(np.sqrt(np.mean(density_error * density_error)))
+        payoff_error = pd.to_numeric(frame["modeled_payout_proxy"], errors="coerce") - pd.to_numeric(frame["actual_payout_proxy"], errors="coerce")
+        payoff_mae = float(np.mean(np.abs(payoff_error))) / 1000.0
+        if objective_name == "profit":
+            objective_score = payoff_mae + 0.08 * density_mae + 0.015 * float(np.mean((weights - prior) ** 2))
+        elif objective_name == "rank_top5":
+            top5 = frame.sort_values("known_final_payoff_rank").head(5)
+            top5_rank_mae = float((top5["modeled_payoff_rank"] - top5["known_final_payoff_rank"]).abs().mean())
+            all_rank_mae = float((frame["modeled_payoff_rank"] - frame["known_final_payoff_rank"]).abs().mean())
+            objective_score = top5_rank_mae + 0.25 * all_rank_mae + 0.05 * density_mae + 0.015 * float(np.mean((weights - prior) ** 2))
+        else:
+            objective_score = density_rmse + 0.15 * density_mae + 0.015 * float(np.mean((weights - prior) ** 2))
+        return objective_score, density_mae, density_rmse
+
+    best: dict[str, float] | None = None
+    rng = np.random.default_rng(7)
+    for exponent in np.arange(0.5, 8.01, 0.5):
+        component_frame = p3_container_components(float(exponent), known_final_rank_tuple)
+        matrix = np.column_stack([
+            pd.to_numeric(component_frame[column], errors="coerce").to_numpy(dtype=float)
+            for _, column, _ in active_specs
+        ])
+        ridge = 1.0
+        prior_strength = 0.18
+        lhs = matrix.T @ matrix + ridge * np.eye(matrix.shape[1])
+        rhs = matrix.T @ target + ridge * prior_strength * prior * 100.0
+        density_fit_weights = np.linalg.solve(lhs, rhs)
+        density_fit_weights = np.clip(density_fit_weights, 0.0, None)
+        if float(density_fit_weights.sum()) <= 0:
+            density_fit_weights = prior.copy()
+        density_fit_weights = density_fit_weights / density_fit_weights.sum()
+
+        candidate_weights: list[np.ndarray] = [prior.copy(), density_fit_weights.copy()]
+        for idx in range(len(active_specs)):
+            one_hot = np.zeros(len(active_specs), dtype=float)
+            one_hot[idx] = 1.0
+            candidate_weights.append(one_hot)
+        for _ in range(40):
+            candidate_weights.append(rng.dirichlet(np.ones(len(active_specs), dtype=float)))
+        for _ in range(40):
+            alpha = 1.0 + 24.0 * density_fit_weights
+            candidate_weights.append(rng.dirichlet(alpha))
+
+        for weights in candidate_weights:
+            weights = np.clip(np.asarray(weights, dtype=float), 0.0, None)
+            if float(weights.sum()) <= 0:
+                continue
+            weights = weights / weights.sum()
+            modeled_density = matrix @ weights
+            frame = component_frame.copy()
+            for idx, (strategy_name, _, _) in enumerate(active_specs):
+                frame[f"{strategy_name}_strategy_weight"] = float(weights[idx] * 100.0)
+                frame[f"{strategy_name}_contribution"] = weights[idx] * frame[f"{strategy_name}_component"]
+            for strategy_name, _, _ in strategy_specs:
+                if strategy_name not in {name for name, _, _ in active_specs}:
+                    frame[f"{strategy_name}_strategy_weight"] = 0.0
+                    frame[f"{strategy_name}_contribution"] = 0.0
+            frame["modeled_density"] = modeled_density
+            frame["model_score"] = frame["modeled_density"]
+            frame["model_error"] = frame["modeled_density"] - frame["actual_density"]
+            frame["absolute_error"] = frame["model_error"].abs()
+            frame["actual_payout_proxy"] = p3_container_payoff(frame["multiplier"], frame["actual_density"], frame["inhabitants"])
+            frame["modeled_payout_proxy"] = p3_container_payoff(frame["multiplier"], frame["modeled_density"], frame["inhabitants"])
+            frame["payoff_error"] = frame["modeled_payout_proxy"] - frame["actual_payout_proxy"]
+            ranked = p3_payoff_ranked_frame(frame)
+            objective_score, mae, rmse = score_frame(ranked, weights, objective)
+            if best is None or objective_score < best["score"]:
+                fitted_weights = empty_weight_map()
+                for idx, (strategy_name, _, _) in enumerate(active_specs):
+                    fitted_weights[f"{strategy_name}_weight"] = float(weights[idx] * 100.0)
+                best = {
+                    **fitted_weights,
+                    "high_number_exponent": float(exponent),
+                    "mae": mae,
+                    "rmse": rmse,
+                    "score": float(objective_score),
+                }
+    return best or {
+        "nash_weight": 20.0,
+        "high_number_weight": 20.0,
+        "avoid_famous_weight": 10.0,
+        "random_weight": 15.0,
+        "nice_numbers_weight": 20.0,
+        "value_hunters_weight": 20.0,
+        "first_order_pnl_weight": 15.0,
+        "high_number_exponent": 3.0,
+        "mae": 0.0,
+        "rmse": 0.0,
+        "score": 0.0,
+    }
+
+
+def p3_container_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=frame["container"],
+            y=frame["nash_density"],
+            name="Nash",
+            marker_color="#4e79a7",
+            hovertemplate="x%{x}<br>Nash %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=frame["container"],
+            y=frame["actual_density"],
+            name="Actual human",
+            marker_color="#f2b447",
+            hovertemplate="x%{x}<br>Actual %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=frame["container"],
+            y=frame["modeled_density"],
+            name="Model predicted",
+            marker_color="#e15759",
+            hovertemplate="x%{x}<br>Model %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.update_layout(barmode="group")
+    fig.update_xaxes(title="Container multiplier")
+    fig.update_yaxes(title="Choice density (%)")
+    return apply_mc_chart_layout(fig, "Prosperity 3 Round 2 · Nash vs Actual vs Model", height=420)
+
+
+def p3_container_error_chart(frame: pd.DataFrame) -> go.Figure:
+    colors = ["#6ccf9c" if value >= 0 else "#e15759" for value in frame["model_error"]]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=frame["container"],
+            y=frame["model_error"],
+            marker_color=colors,
+            name="Model - actual",
+            hovertemplate="x%{x}<br>Error %{y:+.2f}pp<extra></extra>",
+        )
+    )
+    fig.add_hline(y=0, line={"color": "#6f7682", "width": 1})
+    fig.update_xaxes(title="Container multiplier")
+    fig.update_yaxes(title="Percentage-point error")
+    return apply_mc_chart_layout(fig, "Where The Explanation Misses", height=320)
+
+
+def p3_human_vs_nash_difference_chart(frame: pd.DataFrame) -> go.Figure:
+    difference = frame["actual_density"] - frame["nash_density"]
+    colors = ["#f2b447" if value >= 0 else "#4e79a7" for value in difference]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=frame["container"],
+            y=difference,
+            marker_color=colors,
+            name="Human - Nash",
+            customdata=list(zip(frame["actual_density"], frame["nash_density"])),
+            hovertemplate=(
+                "x%{x}<br>"
+                "Human - Nash %{y:+.2f}pp<br>"
+                "Human %{customdata[0]:.2f}%<br>"
+                "Nash %{customdata[1]:.2f}%<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(y=0, line={"color": "#f5f7fb", "width": 1.2})
+    fig.add_annotation(
+        x=0.02,
+        y=1.06,
+        xref="paper",
+        yref="paper",
+        text="Positive = humans over-picked vs Nash · Negative = humans under-picked",
+        showarrow=False,
+        font={"size": 13, "color": "#aeb4bd"},
+        align="left",
+    )
+    max_abs = max(1.0, float(difference.abs().max()))
+    fig.update_xaxes(title="Container multiplier")
+    fig.update_yaxes(title="Human choice density minus Nash density (percentage points)", range=[-1.25 * max_abs, 1.25 * max_abs])
+    return apply_mc_chart_layout(fig, "Big Human vs Nash Difference", height=520)
+
+
+def p3_component_contribution_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    components = [
+        ("Nash", "nash_contribution", "#4e79a7"),
+        ("High-number exponential", "high_number_contribution", "#59a14f"),
+        ("Famous avoiders", "avoid_famous_contribution", "#b07aa1"),
+        ("Random", "random_contribution", "#8a8f98"),
+        ("Nice numbers", "nice_numbers_contribution", "#f2b447"),
+        ("Value hunters", "value_hunters_contribution", "#e15759"),
+        ("p_f from higher-PnL worse crowd rank", "first_order_pnl_contribution", "#76b7b2"),
+    ]
+    for name, column, color in components:
+        fig.add_trace(
+            go.Bar(
+                x=frame["container"],
+                y=frame[column],
+                name=name,
+                marker_color=color,
+                hovertemplate=f"{name}<br>x%{{x}}<br>%{{y:.2f}}pp<extra></extra>",
+            )
+        )
+    fig.update_layout(barmode="stack")
+    fig.update_xaxes(title="Container multiplier")
+    fig.update_yaxes(title="Weighted density contribution (%)")
+    return apply_mc_chart_layout(fig, "What Builds The Model Prediction", height=420)
+
+
+def p3_payoff_ranked_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    ranked = frame.copy()
+    ranked["actual_payoff_rank"] = ranked["actual_payout_proxy"].rank(
+        ascending=False,
+        method="min",
+    ).astype(int)
+    ranked["modeled_payoff_rank"] = ranked["modeled_payout_proxy"].rank(
+        ascending=False,
+        method="min",
+    ).astype(int)
+    ranked["nash_payoff_rank"] = ranked["nash_payout_proxy"].rank(
+        ascending=False,
+        method="min",
+    ).astype(int)
+    ranked["payoff_rank_delta"] = ranked["modeled_payoff_rank"] - ranked["actual_payoff_rank"]
+    return ranked.sort_values(
+        ["actual_payoff_rank", "multiplier"],
+        ascending=[True, True],
+    )
+
+
+def p3_payout_proxy_chart(frame: pd.DataFrame) -> go.Figure:
+    ranked = p3_payoff_ranked_frame(frame)
+    category_order = ranked["container"].tolist()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=ranked["container"],
+            y=ranked["nash_payout_proxy"],
+            name="Nash payoff",
+            marker_color="#4e79a7",
+            hovertemplate="Nash payoff<br>x%{x}<br>%{y:,.0f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=ranked["container"],
+            y=ranked["actual_payout_proxy"],
+            name="Actual payoff",
+            marker_color="#f2b447",
+            text=[f"A#{rank}" for rank in ranked["actual_payoff_rank"]],
+            textposition="outside",
+            cliponaxis=False,
+            customdata=list(zip(ranked["actual_payoff_rank"], ranked["actual_density"])),
+            hovertemplate=(
+                "Actual payoff<br>x%{x}<br>%{y:,.0f}<br>"
+                "Actual rank #%{customdata[0]}<br>"
+                "Actual density %{customdata[1]:.2f}%<extra></extra>"
+            ),
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=ranked["container"],
+            y=ranked["modeled_payout_proxy"],
+            name="Predicted payoff",
+            marker_color="#e15759",
+            text=[f"P#{rank}" for rank in ranked["modeled_payoff_rank"]],
+            textposition="outside",
+            cliponaxis=False,
+            customdata=list(zip(ranked["modeled_payoff_rank"], ranked["modeled_density"], ranked["payoff_rank_delta"])),
+            hovertemplate=(
+                "Predicted payoff<br>x%{x}<br>%{y:,.0f}<br>"
+                "Predicted rank #%{customdata[0]}<br>"
+                "Predicted density %{customdata[1]:.2f}%<br>"
+                "Rank delta %{customdata[2]:+d}<extra></extra>"
+            ),
+        )
+    )
+    max_payoff = max(1.0, float(ranked[["nash_payout_proxy", "actual_payout_proxy", "modeled_payout_proxy"]].max().max()))
+    fig.update_layout(barmode="group")
+    fig.update_xaxes(
+        title="Container multiplier, sorted by actual payoff high to low",
+        categoryorder="array",
+        categoryarray=category_order,
+    )
+    fig.update_yaxes(title="Payoff", range=[0, max_payoff * 1.18])
+    return apply_mc_chart_layout(fig, "Payoff Function Under Each Crowd", height=420)
+
+
+def p3_payoff_difference_chart(frame: pd.DataFrame) -> go.Figure:
+    ranked = p3_payoff_ranked_frame(frame)
+    colors = ["#6ccf9c" if value >= 0 else "#e15759" for value in ranked["payoff_error"]]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=ranked["container"],
+            y=ranked["payoff_error"],
+            marker_color=colors,
+            name="Predicted - actual payoff",
+            customdata=list(zip(ranked["modeled_payout_proxy"], ranked["actual_payout_proxy"], ranked["modeled_payoff_rank"], ranked["actual_payoff_rank"])),
+            hovertemplate=(
+                "x%{x}<br>"
+                "Predicted - actual %{y:+,.0f}<br>"
+                "Predicted %{customdata[0]:,.0f}<br>"
+                "Actual %{customdata[1]:,.0f}<br>"
+                "Pred rank #%{customdata[2]} · Actual rank #%{customdata[3]}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(y=0, line={"color": "#f5f7fb", "width": 1.2})
+    fig.update_xaxes(
+        title="Container multiplier, sorted by actual payoff high to low",
+        categoryorder="array",
+        categoryarray=ranked["container"].tolist(),
+    )
+    fig.update_yaxes(title="Predicted payoff minus actual payoff")
+    return apply_mc_chart_layout(fig, "Predicted Payoff Error", height=340)
+
+
+def divisor_count(value: int) -> int:
+    if value <= 0:
+        return 0
+    count = 0
+    root = int(math.sqrt(value))
+    for factor in range(1, root + 1):
+        if value % factor == 0:
+            count += 2
+    if root * root == value:
+        count -= 1
+    return count
+
+
+def is_prime_number(value: int) -> bool:
+    return value > 1 and divisor_count(value) == 2
+
+
+def p3_behavior_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame.copy()
+    multipliers = pd.to_numeric(output["multiplier"], errors="coerce").astype(float)
+    inhabitants = pd.to_numeric(output["inhabitants"], errors="coerce").astype(float)
+    midpoint = float(multipliers.median())
+    half_range = max(1.0, float(multipliers.max() - multipliers.min()) / 2.0)
+    text_values = output["multiplier"].astype(int).astype(str)
+
+    digit_bias = []
+    for multiplier in output["multiplier"]:
+        value = int(multiplier)
+        text = str(value)
+        score = 0.25
+        if value == 37:
+            score = 0.15
+        else:
+            if "3" in text:
+                score += 1.0
+            if "7" in text:
+                score += 1.0
+            if value == 73:
+                score += 1.75
+        digit_bias.append(score)
+
+    output["human_minus_nash"] = output["actual_density"] - output["nash_density"]
+    output["multiplier_level"] = multipliers
+    output["inhabitants_level"] = inhabitants
+    output["nash_crowding"] = output["nash_density"]
+    output["nash_payoff_proxy"] = output["nash_payout_proxy"]
+    output["crowd_avoidance"] = 1.0 / (output["nash_density"] + 0.75)
+    output["multiplier_per_inhabitant"] = multipliers / inhabitants.clip(lower=1.0)
+    output["risk_averse_middle"] = 1.0 - ((multipliers - midpoint).abs() / half_range).clip(upper=1.0)
+    output["extreme_pick"] = ((multipliers - midpoint).abs() / half_range).clip(upper=1.0)
+    output["digit_3_or_7_bias"] = digit_bias
+    output["has_3"] = text_values.str.contains("3").astype(float)
+    output["has_7"] = text_values.str.contains("7").astype(float)
+    output["special_73"] = (multipliers == 73).astype(float)
+    output["famous_37"] = (multipliers == 37).astype(float)
+    output["round_number"] = (multipliers % 10 == 0).astype(float)
+    output["factor_count"] = multipliers.map(lambda value: divisor_count(int(value))).astype(float)
+    output["proper_factor_count"] = (output["factor_count"] - 2.0).clip(lower=0.0)
+    output["prime_multiplier"] = multipliers.map(lambda value: 1.0 if is_prime_number(int(value)) else 0.0)
+    output["composite_multiplier"] = 1.0 - output["prime_multiplier"]
+    output["special_73_feature_raw"] = (multipliers == 73).astype(float)
+    output["nash_pull"] = output["nash_component"]
+    output["digit_pull"] = output["digit_component"]
+    output["model_predicted"] = output["modeled_density"]
+    output["model_minus_actual"] = output["model_error"]
+    return output
+
+
+def safe_corr(left: pd.Series, right: pd.Series, method: str = "pearson") -> float:
+    paired = pd.DataFrame({"left": left, "right": right}).replace([math.inf, -math.inf], pd.NA).dropna()
+    if len(paired) < 3:
+        return 0.0
+    if float(paired["left"].std()) == 0.0 or float(paired["right"].std()) == 0.0:
+        return 0.0
+    if method == "spearman":
+        return float(paired["left"].rank().corr(paired["right"].rank()))
+    return float(paired["left"].corr(paired["right"]))
+
+
+def p3_correlation_table(frame: pd.DataFrame, target_column: str) -> pd.DataFrame:
+    features = p3_behavior_feature_frame(frame)
+    feature_labels = {
+        "nash_payoff_proxy": "Nash payoff proxy",
+        "multiplier_per_inhabitant": "Multiplier / inhabitant",
+        "digit_3_or_7_bias": "3/7 bias score",
+        "special_73": "Special 73",
+    }
+    rows = []
+    target = pd.to_numeric(features[target_column], errors="coerce")
+    for column, label in feature_labels.items():
+        series = pd.to_numeric(features[column], errors="coerce")
+        pearson = safe_corr(series, target, "pearson")
+        spearman = safe_corr(series, target, "spearman")
+        significant = abs(pearson) >= 0.632
+        rows.append(
+            {
+                "Feature": label,
+                "Pearson": pearson,
+                "Spearman": spearman,
+                "Abs Pearson": abs(pearson),
+                "Significant": significant,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("Abs Pearson", ascending=False)
+
+
+def p3_correlation_chart(correlations: pd.DataFrame, target_label: str) -> go.Figure:
+    top = correlations.head(16).iloc[::-1].copy()
+    colors = ["#f2b447" if value >= 0 else "#4e79a7" for value in top["Pearson"]]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=top["Pearson"],
+            y=top["Feature"],
+            orientation="h",
+            marker_color=colors,
+            customdata=top["Spearman"],
+            hovertemplate=(
+                "%{y}<br>"
+                "Pearson %{x:+.3f}<br>"
+                "Spearman %{customdata:+.3f}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_vline(x=0, line={"color": "#f5f7fb", "width": 1.2})
+    fig.update_xaxes(title=f"Correlation with {target_label}", range=[-1.05, 1.05])
+    fig.update_yaxes(title="")
+    return apply_mc_chart_layout(fig, "Behavior Feature Correlations", height=620)
+
+
+def p3_correlation_strength(value: float) -> str:
+    magnitude = abs(float(value))
+    if magnitude >= 0.8:
+        return "very strong"
+    if magnitude >= 0.6:
+        return "strong"
+    if magnitude >= 0.4:
+        return "moderate"
+    if magnitude >= 0.2:
+        return "weak"
+    return "tiny"
+
+
+def p3_target_effect_phrase(target_label: str, sign: float) -> str:
+    direction = "higher" if sign >= 0 else "lower"
+    if target_label == "Human - Nash difference":
+        return (
+            f"Containers high on this feature were {direction} relative to Nash; "
+            "positive means humans over-picked them, negative means humans under-picked them."
+        )
+    if target_label == "Actual human density":
+        return f"Containers high on this feature got {direction} actual human pick density."
+    if target_label == "Model predicted density":
+        return f"Containers high on this feature receive {direction} model-predicted crowd density."
+    if target_label == "Model - actual error":
+        if sign >= 0:
+            return "The model tends to over-predict human density where this feature is high."
+        return "The model tends to under-predict human density where this feature is high."
+    return f"Containers high on this feature move the selected target {direction}."
+
+
+def p3_feature_explanations() -> dict[str, str]:
+    return {
+        "Nash payoff proxy": "The estimated payoff if the crowd followed the Nash table.",
+        "Multiplier / inhabitant": "Reward divided by fixed crowd. This captures the simple high-upside, low-crowd instinct.",
+        "3/7 bias score": "Psychological digit score for numbers containing 3 or 7, with extra weight on 73 and no hidden boost for famous 37.",
+        "Special 73": "Whether the container is exactly 73, the strongest 3/7-bias candidate.",
+    }
+
+
+def p3_correlation_display_table(correlations: pd.DataFrame) -> pd.DataFrame:
+    output = correlations[["Feature", "Pearson", "Spearman", "Significant"]].copy()
+    output["Pearson"] = output["Pearson"].map(lambda value: f"{float(value):+.3f}")
+    output["Spearman"] = output["Spearman"].map(lambda value: f"{float(value):+.3f}")
+    output["Significant"] = output["Significant"].map(lambda value: "yes, p<0.05" if value else "no")
+    return output
+
+
+def p3_correlation_interpretation_table(correlations: pd.DataFrame, target_label: str) -> pd.DataFrame:
+    explanations = p3_feature_explanations()
+    output = correlations[["Feature", "Pearson", "Spearman", "Significant"]].copy()
+    output["Strength"] = output["Pearson"].map(p3_correlation_strength)
+    output["What this factor means"] = output["Feature"].map(explanations).fillna("")
+    output["Effect on selected graph"] = output["Pearson"].map(
+        lambda value: p3_target_effect_phrase(target_label, float(value))
+    )
+    output["Pearson"] = output["Pearson"].map(lambda value: f"{float(value):+.3f}")
+    output["Spearman"] = output["Spearman"].map(lambda value: f"{float(value):+.3f}")
+    output["Significant"] = output["Significant"].map(lambda value: "yes" if value else "no")
+    return output
+
+
+def p3_container_table(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame[
+        [
+            "multiplier",
+            "inhabitants",
+            "nash_density",
+            "actual_density",
+            "modeled_density",
+            "model_error",
+            "modeled_payout_proxy",
+        ]
+    ].copy()
+    output.columns = [
+        "mult",
+        "inhab",
+        "Nash %",
+        "Actual %",
+        "Model %",
+        "Error pp",
+        "Pred payoff",
+    ]
+    for column in ["Nash %", "Actual %", "Model %", "Error pp"]:
+        output[column] = output[column].map(lambda value: f"{float(value):.2f}")
+    output["Pred payoff"] = output["Pred payoff"].map(lambda value: f"{float(value):,.0f}")
+    return output
+
+
+def p3_payoff_comparison_table(frame: pd.DataFrame) -> pd.DataFrame:
+    ranked = p3_payoff_ranked_frame(frame)
+    output = ranked[
+        [
+            "multiplier",
+            "inhabitants",
+            "actual_density",
+            "modeled_density",
+            "actual_payoff_rank",
+            "modeled_payoff_rank",
+            "known_final_payoff_rank",
+            "nash_payout_proxy",
+            "actual_payout_proxy",
+            "modeled_payout_proxy",
+            "payoff_rank_delta",
+            "payoff_error",
+        ]
+    ].copy()
+    output.columns = [
+        "mult",
+        "inhab",
+        "Actual %",
+        "Pred %",
+        "Actual rank",
+        "Pred rank",
+        "x rank",
+        "Nash payoff",
+        "Actual payoff",
+        "Pred payoff",
+        "Rank delta",
+        "Pred - actual",
+    ]
+    for column in ["Actual %", "Pred %"]:
+        output[column] = output[column].map(lambda value: f"{float(value):.2f}")
+    output["x rank"] = output["x rank"].map(lambda value: f"{int(value)}")
+    for column in ["Nash payoff", "Actual payoff", "Pred payoff", "Pred - actual"]:
+        output[column] = output[column].map(lambda value: f"{float(value):+,.0f}" if column == "Pred - actual" else f"{float(value):,.0f}")
+    output["Rank delta"] = output["Rank delta"].map(lambda value: f"{int(value):+d}")
+    return output
+
+
+def p3_first_order_payoff_table(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame[
+        [
+            "multiplier",
+            "inhabitants",
+            "first_order_pf_percent",
+            "first_order_denominator",
+            "first_order_payout_proxy",
+            "known_final_payoff_rank",
+        ]
+    ].copy()
+    output.insert(0, "Island", range(len(output)))
+    output.columns = [
+        "Island",
+        "M_f",
+        "I_f",
+        "p_f (%)",
+        "Denominator (p_f + I_f)",
+        "PnL",
+        "Known final payoff rank",
+    ]
+    output["p_f (%)"] = output["p_f (%)"].map(lambda value: f"{float(value):.1f}")
+    output["Denominator (p_f + I_f)"] = output["Denominator (p_f + I_f)"].map(lambda value: f"{float(value):.1f}")
+    output["PnL"] = output["PnL"].map(lambda value: f"{float(value):,.0f}")
+    output["Known final payoff rank"] = output["Known final payoff rank"].map(lambda value: f"{int(value)}")
+    return output
+
+
+def p3_rank_implied_crowd_table(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame[
+        [
+            "multiplier",
+            "inhabitants",
+            "known_final_payoff_rank",
+            "first_order_rank_score",
+            "rank_inferred_pf_percent",
+            "rank_inferred_denominator",
+            "rank_inferred_payout_proxy",
+            "rank_inferred_payoff_rank",
+        ]
+    ].copy()
+    output.columns = [
+        "M_f",
+        "I_f",
+        "Known final payoff rank",
+        "Payoff tier score",
+        "Estimated p_f (%)",
+        "Denominator (p_f + I_f)",
+        "Implied final PnL",
+        "Implied final payoff rank",
+    ]
+    output["Known final payoff rank"] = output["Known final payoff rank"].map(lambda value: f"{int(value)}")
+    output["Payoff tier score"] = output["Payoff tier score"].map(lambda value: f"{int(value)}")
+    output["Estimated p_f (%)"] = output["Estimated p_f (%)"].map(lambda value: f"{float(value):.2f}")
+    output["Denominator (p_f + I_f)"] = output["Denominator (p_f + I_f)"].map(lambda value: f"{float(value):.2f}")
+    output["Implied final PnL"] = output["Implied final PnL"].map(lambda value: f"{float(value):,.0f}")
+    output["Implied final payoff rank"] = output["Implied final payoff rank"].map(lambda value: f"{int(value)}")
+    return output
+
+
+def p3_strategy_prior_table(weights: dict[str, float]) -> pd.DataFrame:
+    rows = [
+        {
+            "Strategy": "Nash",
+            "Weight %": weights["nash_weight"],
+            "Logic": "Players copy the equilibrium allocation.",
+        },
+        {
+            "Strategy": "High-number exponential",
+            "Weight %": weights["high_number_weight"],
+            "Logic": "Players increasingly favor higher multipliers; exponent controls sharpness.",
+        },
+        {
+            "Strategy": "Famous avoiders",
+            "Weight %": weights["avoid_famous_weight"],
+            "Logic": "Players avoid obvious/famous numbers: 10, 20, 37, 50, 90.",
+        },
+        {
+            "Strategy": "Random",
+            "Weight %": weights["random_weight"],
+            "Logic": "Players pick without reasoning; uniform across containers.",
+        },
+        {
+            "Strategy": "Nice numbers",
+            "Weight %": weights["nice_numbers_weight"],
+            "Logic": "Players gravitate to memorable 3/7 numbers, especially 73.",
+        },
+        {
+            "Strategy": "Value hunters",
+            "Weight %": weights["value_hunters_weight"],
+            "Logic": "Players favor high multiplier per fixed inhabitant.",
+        },
+        {
+            "Strategy": "Infer p_f from known final payoff ranking",
+            "Weight %": weights["first_order_pnl_weight"],
+            "Logic": "Players assume the final payoff ranking is known. Using only that order, they estimate crowd shares by fitting a simple monotone payoff ladder and inverting the payoff formula to solve for p_f.",
+        },
+    ]
+    output = pd.DataFrame(rows)
+    output["Weight %"] = output["Weight %"].map(lambda value: f"{float(value):.1f}")
+    return output
+
+
+def p3_strategy_multiplier_table(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame[
+        [
+            "multiplier",
+            "nash_component",
+            "high_number_component",
+            "avoid_famous_component",
+            "random_component",
+            "nice_numbers_component",
+            "value_hunters_component",
+            "first_order_pnl_component",
+            "modeled_density",
+            "actual_density",
+        ]
+    ].copy()
+    output.columns = [
+        "mult",
+        "Nash %",
+        "High # %",
+        "Avoid famous %",
+        "Random %",
+        "Nice %",
+        "Value %",
+        "Inferred p_f from rank %",
+        "Model %",
+        "Actual %",
+    ]
+    for column in output.columns:
+        if column != "mult":
+            output[column] = output[column].map(lambda value: f"{float(value):.2f}")
+    return output
+
+
+def p3_set_synced_param(key: str, value: float) -> None:
+    st.session_state[f"{key}_slider"] = float(value)
+    st.session_state[f"{key}_number"] = float(value)
+
+
+def p3_slider_with_number(
+    label: str,
+    min_value: float,
+    max_value: float,
+    default_value: float,
+    step: float,
+    key: str,
+    help_text: str = "",
+    disabled: bool = False,
+) -> float:
+    slider_key = f"{key}_slider"
+    number_key = f"{key}_number"
+    st.session_state.setdefault(slider_key, float(default_value))
+    st.session_state.setdefault(number_key, float(default_value))
+
+    def sync_from_slider() -> None:
+        st.session_state[number_key] = float(st.session_state[slider_key])
+
+    def sync_from_number() -> None:
+        value = float(st.session_state[number_key])
+        value = min(float(max_value), max(float(min_value), value))
+        st.session_state[number_key] = value
+        st.session_state[slider_key] = value
+
+    slider_col, input_col = st.columns([2.35, 0.85], gap="small")
+    with slider_col:
+        st.slider(
+            label,
+            min_value=float(min_value),
+            max_value=float(max_value),
+            step=float(step),
+            key=slider_key,
+            on_change=sync_from_slider,
+            help=help_text,
+            disabled=disabled,
+        )
+    with input_col:
+        st.number_input(
+            f"{label} exact",
+            min_value=float(min_value),
+            max_value=float(max_value),
+            step=float(step),
+            key=number_key,
+            on_change=sync_from_number,
+            label_visibility="collapsed",
+            disabled=disabled,
+        )
+    return float(st.session_state[number_key])
+
+
+def p3_r3_reserve_fill_fraction(
+    bid: pd.Series | float,
+    reserve_low: float,
+    reserve_high: float,
+) -> pd.Series | float:
+    bid_numeric = pd.to_numeric(bid, errors="coerce")
+    fraction = (bid_numeric - float(reserve_low)) / max(float(reserve_high) - float(reserve_low), 1e-9)
+    return np.clip(fraction, 0.0, 1.0)
+
+
+def p3_r3_average_penalty(
+    bid: pd.Series | float,
+    average_bid: float,
+    resale_price: float,
+    exponent: float,
+) -> pd.Series | float:
+    bid_numeric = pd.to_numeric(bid, errors="coerce")
+    denominator = np.maximum(float(resale_price) - bid_numeric, 1e-9)
+    numerator = max(float(resale_price) - float(average_bid), 0.0)
+    raw_penalty = (numerator / denominator) ** float(exponent)
+    return np.minimum(raw_penalty, 1.0)
+
+
+def p3_r3_profit(
+    bid: pd.Series | float,
+    seller_count: float,
+    reserve_low: float,
+    reserve_high: float,
+    resale_price: float,
+    average_bid: float | None = None,
+    exponent: float = 3.0,
+) -> pd.Series | float:
+    bid_numeric = pd.to_numeric(bid, errors="coerce")
+    fill_fraction = p3_r3_reserve_fill_fraction(bid_numeric, reserve_low, reserve_high)
+    unit_edge = np.maximum(float(resale_price) - bid_numeric, 0.0)
+    base = float(seller_count) * fill_fraction * unit_edge
+    if average_bid is None:
+        return base
+    return base * p3_r3_average_penalty(bid_numeric, average_bid, resale_price, exponent)
+
+
+def p3_r3_payoff_frame(
+    seller_count: float,
+    average_bid: float,
+    exponent: float,
+    reserve_low: float = 250.0,
+    reserve_high: float = 320.0,
+    resale_price: float = 320.0,
+) -> pd.DataFrame:
+    bids = np.arange(int(math.floor(reserve_low)), int(math.floor(resale_price)) + 1)
+    frame = pd.DataFrame({"Bid": bids})
+    frame["Reserve fill %"] = 100.0 * p3_r3_reserve_fill_fraction(frame["Bid"], reserve_low, reserve_high)
+    frame["Penalty factor"] = p3_r3_average_penalty(frame["Bid"], average_bid, resale_price, exponent)
+    frame["Game payoff"] = p3_r3_profit(
+        frame["Bid"],
+        seller_count,
+        reserve_low,
+        reserve_high,
+        resale_price,
+        average_bid,
+        exponent,
+    )
+    frame["No-penalty payoff"] = p3_r3_profit(
+        frame["Bid"],
+        seller_count,
+        reserve_low,
+        reserve_high,
+        resale_price,
+        None,
+        exponent,
+    )
+    return frame
+
+
+def p3_r3_payoff_chart(frame: pd.DataFrame, selected_bid: float) -> go.Figure:
+    selected = frame.iloc[(frame["Bid"] - selected_bid).abs().argsort()[:1]]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=frame["Bid"],
+            y=frame["No-penalty payoff"],
+            mode="lines",
+            name="Reserve-only payoff",
+            line={"color": "#7aa2f7", "width": 2.4, "dash": "dot"},
+            hovertemplate="Bid %{x}<br>Payoff %{y:,.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["Bid"],
+            y=frame["Game payoff"],
+            mode="lines",
+            name="With average-bid penalty",
+            line={"color": "#f6c85f", "width": 3.0},
+            hovertemplate="Bid %{x}<br>Payoff %{y:,.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=selected["Bid"],
+            y=selected["Game payoff"],
+            mode="markers",
+            name="Selected bid",
+            marker={"color": "#e15759", "size": 13, "symbol": "diamond"},
+            hovertemplate="Selected bid %{x}<br>Payoff %{y:,.2f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="Your bid / reserve price")
+    fig.update_yaxes(title="Expected profit")
+    return apply_mc_chart_layout(fig, "Round 3 Reserve Price Payoff Curve", height=430)
+
+
+def p3_r3_penalty_chart(frame: pd.DataFrame, selected_bid: float) -> go.Figure:
+    selected = frame.iloc[(frame["Bid"] - selected_bid).abs().argsort()[:1]]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=frame["Bid"],
+            y=frame["Reserve fill %"],
+            mode="lines",
+            name="Seller fill %",
+            line={"color": "#6ccf9c", "width": 2.5},
+            hovertemplate="Bid %{x}<br>Seller fill %{y:.1f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=frame["Bid"],
+            y=100.0 * frame["Penalty factor"],
+            mode="lines",
+            name="Average penalty %",
+            line={"color": "#e15759", "width": 2.5},
+            hovertemplate="Bid %{x}<br>Penalty %{y:.1f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=selected["Bid"],
+            y=100.0 * selected["Penalty factor"],
+            mode="markers",
+            name="Selected penalty",
+            marker={"color": "#f6c85f", "size": 11},
+            hovertemplate="Selected bid %{x}<br>Penalty %{y:.1f}%<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="Your bid")
+    fig.update_yaxes(title="Percent")
+    return apply_mc_chart_layout(fig, "Fill Rate vs Average-Bid Penalty", height=360)
+
+
+def p3_r3_top_bid_table(frame: pd.DataFrame, selected_bid: float, limit: int = 12) -> pd.DataFrame:
+    table = frame.sort_values("Game payoff", ascending=False).head(limit).copy()
+    selected_row = frame.iloc[(frame["Bid"] - selected_bid).abs().argsort()[:1]].copy()
+    selected_row["Rank label"] = "selected"
+    table["Rank label"] = [f"#{idx}" for idx in range(1, len(table) + 1)]
+    if int(selected_row["Bid"].iloc[0]) not in set(table["Bid"].astype(int)):
+        table = pd.concat([table, selected_row], ignore_index=True)
+    table = table[["Rank label", "Bid", "Reserve fill %", "Penalty factor", "No-penalty payoff", "Game payoff"]]
+    for column in ["Reserve fill %"]:
+        table[column] = table[column].map(lambda value: f"{float(value):.1f}%")
+    for column in ["Penalty factor"]:
+        table[column] = table[column].map(lambda value: f"{float(value):.3f}")
+    for column in ["No-penalty payoff", "Game payoff"]:
+        table[column] = table[column].map(lambda value: fmt_number(value, 2))
+    return table
+
+
+def render_p3_reserve_manual_page() -> None:
+    st.markdown(
+        '<div class="mc-title">Prosperity 3 Round 3 <span class="mc-chip">reserve price game</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="mc-panel">
+          <div class="mc-section-title">Problem Statement</div>
+          <div class="mc-note">
+            Round 3 was a reserve-price optimization game. Sellers had private reserve prices. A seller trades with you only if your bid is at least their reserve price. Goods bought in the challenge could be resold for <b>320</b>, so bidding higher wins more sellers but earns less profit per unit.
+            <br><br>
+            The game-theory twist: when your bid is below the crowd average, your payoff is scaled down. This creates a tension between the pure mathematical optimum and the strategic guess of where other teams will bid.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    controls, main_panel = st.columns([1.0, 2.15], gap="medium")
+    with controls:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Sliders</div>', unsafe_allow_html=True)
+        selected_bid = p3_slider_with_number(
+            "Your bid p",
+            250.0,
+            319.0,
+            303.0,
+            1.0,
+            "p3_r3_selected_bid",
+            "Your chosen reserve-price bid.",
+        )
+        average_bid = p3_slider_with_number(
+            "Crowd average μ",
+            250.0,
+            319.0,
+            287.0,
+            1.0,
+            "p3_r3_average_bid",
+            "Estimated average bid from all participating teams.",
+        )
+        seller_count = p3_slider_with_number(
+            "Number of sellers N",
+            1.0,
+            500.0,
+            100.0,
+            1.0,
+            "p3_r3_seller_count",
+            "Scales expected payoff. It does not change the optimal bid.",
+        )
+        penalty_exponent = p3_slider_with_number(
+            "Penalty exponent",
+            1.0,
+            6.0,
+            3.0,
+            0.25,
+            "p3_r3_penalty_exponent",
+            "The official writeup used a cubic-looking penalty. Higher means harsher punishment below average.",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Core Equations</div>
+              <div class="mc-note">
+                Reserve-only payoff:<br>
+                <code>Π(p) = N · ((p - 250) / 70) · (320 - p)</code>
+                <br><br>
+                Strategic penalty:<br>
+                <code>S(p, μ) = min(((320 - μ) / (320 - p))³, 1)</code>
+                <br><br>
+                Final game payoff:<br>
+                <code>Π(p, μ) = N · ((p - 250) / 70) · (320 - p) · S(p, μ)</code>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    frame = p3_r3_payoff_frame(seller_count, average_bid, penalty_exponent)
+    selected_row = frame.iloc[(frame["Bid"] - selected_bid).abs().argsort()[:1]].iloc[0]
+    best_row = frame.sort_values("Game payoff", ascending=False).iloc[0]
+    reserve_only_best = frame.sort_values("No-penalty payoff", ascending=False).iloc[0]
+
+    with main_panel:
+        card_a, card_b, card_c, card_d = st.columns(4)
+        with card_a:
+            mc_card("Selected payoff", fmt_number(selected_row["Game payoff"], 2), f"bid {int(selected_row['Bid'])}")
+        with card_b:
+            mc_card("Best strategic bid", str(int(best_row["Bid"])), f"payoff {fmt_number(best_row['Game payoff'], 2)}")
+        with card_c:
+            mc_card("Reserve-only optimum", str(int(reserve_only_best["Bid"])), f"payoff {fmt_number(reserve_only_best['No-penalty payoff'], 2)}")
+        with card_d:
+            mc_card("Penalty at selected", f"{100.0 * selected_row['Penalty factor']:.1f}%", f"fill {selected_row['Reserve fill %']:.1f}%")
+
+        st.plotly_chart(p3_r3_payoff_chart(frame, selected_bid), use_container_width=True)
+        lower_left, lower_right = st.columns([1.0, 1.15], gap="medium")
+        with lower_left:
+            st.plotly_chart(p3_r3_penalty_chart(frame, selected_bid), use_container_width=True)
+        with lower_right:
+            st.markdown('<div class="mc-panel"><div class="mc-section-title">Best Bids Under Current Assumptions</div>', unsafe_allow_html=True)
+            mc_table(p3_r3_top_bid_table(frame, selected_bid))
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Intuition</div>
+              <div class="mc-note">
+                If you bid too low, you keep a large per-unit edge but very few sellers accept. If you bid too high, many sellers accept but your resale margin disappears. Without game theory, the maximum sits near the midpoint of the reserve distribution. With the average-bid penalty, being too far below the crowd average can be worse than giving up some margin by bidding higher.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Observed Human Distribution</div>
+              <div class="mc-note">
+                The realized crowd was not spread smoothly across the reserve-price range. First bids clustered extremely hard around <b>200</b>, while second bids clustered around the high-280s, especially <b>286–290</b>. That is a nice example of a manual round where the first decision was mostly solved analytically, but the second decision was shaped much more by focal points and social coordination.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        try:
+            st.image(
+                str(P3_R3_HUMAN_DISTRIBUTION_IMAGE),
+                caption="Prosperity 3 Round 3 human bid distribution for first and second bids.",
+                use_container_width=True,
+            )
+        except Exception:
+            st.info("Human-distribution screenshot is referenced here, but the local image could not be loaded in this environment.")
+
+
+def p3_r3_option_smile_chart(
+    scatter: pd.DataFrame,
+    options: pd.DataFrame,
+    published_coeffs: np.ndarray,
+    dynamic_coeffs: np.ndarray,
+    fit_mode: str,
+) -> go.Figure:
+    fig = go.Figure()
+    strike_colors = {
+        9500: "#5b7cfa",
+        9750: "#e76f51",
+        10000: "#59c17a",
+        10250: "#8d70ff",
+        10500: "#f4a261",
+    }
+    for strike in P3_R3_OPTION_STRIKES:
+        frame = scatter[scatter["strike"] == strike]
+        if frame.empty:
+            continue
+        fig.add_trace(
+            go.Scattergl(
+                x=frame["moneyness"],
+                y=frame["market_iv"],
+                mode="markers",
+                name=f"strike={strike}",
+                marker={"size": 5, "opacity": 0.55, "color": strike_colors.get(strike, "#93a1b2")},
+                hovertemplate="m=%{x:.3f}<br>IV=%{y:.3f}<extra></extra>",
+            )
+        )
+
+    domain = options["moneyness"].replace([np.inf, -np.inf], np.nan).dropna()
+    if not domain.empty:
+        xs = np.linspace(float(domain.min()), float(domain.max()), 250)
+        published_poly = np.poly1d(published_coeffs)
+        dynamic_poly = np.poly1d(dynamic_coeffs)
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=published_poly(xs),
+                mode="lines",
+                name="Frankfurt published fit",
+                line={"color": "#111111", "width": 3},
+                hovertemplate="published fit<br>m=%{x:.3f}<br>IV=%{y:.3f}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=dynamic_poly(xs),
+                mode="lines",
+                name="Dashboard refit",
+                line={"color": "#f6c85f", "width": 2, "dash": "dash"},
+                visible=True if fit_mode == "Dashboard refit" else "legendonly",
+                hovertemplate="dashboard refit<br>m=%{x:.3f}<br>IV=%{y:.3f}<extra></extra>",
+            )
+        )
+    fig.update_xaxes(title="moneyness  log(K / S) / sqrt(tau)")
+    fig.update_yaxes(title="implied volatility")
+    return apply_mc_chart_layout(fig, "Figure 6a: Volatility Smile", height=420)
+
+
+def p3_r3_multi_strike_timeseries_chart(
+    frame: pd.DataFrame,
+    value_column: str,
+    title: str,
+    y_title: str,
+    zero_line: bool = True,
+) -> go.Figure:
+    fig = go.Figure()
+    strike_colors = {
+        9500: "#5b7cfa",
+        9750: "#e76f51",
+        10000: "#59c17a",
+        10250: "#8d70ff",
+        10500: "#f4a261",
+    }
+    for strike in P3_R3_OPTION_STRIKES:
+        sub = frame[frame["strike"] == strike].sort_values("timestamp")
+        if sub.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=sub["timestamp"],
+                y=sub[value_column],
+                mode="lines",
+                name=f"strike={strike}",
+                line={"width": 1.7, "color": strike_colors.get(strike, "#93a1b2")},
+                hovertemplate="t=%{x}<br>value=%{y:.3f}<extra></extra>",
+            )
+        )
+    if zero_line:
+        fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="timestamp")
+    fig.update_yaxes(title=y_title)
+    return apply_mc_chart_layout(fig, title, height=360)
+
+
+def p3_r3_focus_price_chart(
+    focus: pd.DataFrame,
+    focus_trades: pd.DataFrame,
+    focus_strike: int,
+) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=focus["timestamp"],
+            y=focus["option_wall_mid"],
+            mode="lines+markers",
+            name="Observed voucher price",
+            line={"color": "#5b7cfa", "width": 2},
+            marker={"size": 4, "color": "#355cfa"},
+            hovertemplate="t=%{x}<br>market=%{y:.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=focus["timestamp"],
+            y=focus["fair_price"],
+            mode="lines",
+            name="Theoretical price",
+            line={"color": "#f4a261", "width": 2},
+            hovertemplate="t=%{x}<br>theo=%{y:.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=focus["timestamp"],
+            y=focus["bid_price_1"],
+            mode="markers",
+            name="Best bid",
+            marker={"size": 7, "symbol": "circle", "color": "#2448ff", "opacity": 0.8},
+            hovertemplate="t=%{x}<br>bid=%{y:.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=focus["timestamp"],
+            y=focus["ask_price_1"],
+            mode="markers",
+            name="Best ask",
+            marker={"size": 7, "symbol": "circle", "color": "#ff5f5f", "opacity": 0.8},
+            hovertemplate="t=%{x}<br>ask=%{y:.2f}<extra></extra>",
+        )
+    )
+    if not focus_trades.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=focus_trades["timestamp"],
+                y=focus_trades["price"],
+                mode="markers",
+                name="Public trades",
+                marker={
+                    "size": np.clip(np.abs(focus_trades["quantity"]) * 1.4, 7, 18),
+                    "symbol": "cross",
+                    "color": "#ffd166",
+                    "line": {"color": "#f0f0f0", "width": 0.6},
+                },
+                hovertemplate="t=%{x}<br>trade=%{y:.2f}<br>qty=%{marker.size:.0f}<extra></extra>",
+            )
+        )
+    fig.update_xaxes(title="timestamp")
+    fig.update_yaxes(title=f"voucher_{focus_strike} price")
+    return apply_mc_chart_layout(fig, "Figure 7a: Focus Strike Price Fluctuations", height=390)
+
+
+def p3_r3_focus_normalized_chart(focus: pd.DataFrame, focus_strike: int) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=focus["timestamp"],
+            y=focus["normalized_deviation_pct"],
+            mode="lines+markers",
+            name="Normalized deviation %",
+            line={"color": "#5b7cfa", "width": 2},
+            marker={"size": 4, "color": "#355cfa"},
+            hovertemplate="t=%{x}<br>norm dev=%{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=focus["timestamp"],
+            y=100.0 * focus["mean_theo_diff"] / focus["fair_price"].replace(0, pd.NA),
+            mode="lines",
+            name="EMA(20) baseline %",
+            line={"color": "#f4a261", "width": 2},
+            hovertemplate="t=%{x}<br>ema=%{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="timestamp")
+    fig.update_yaxes(title=f"voucher_{focus_strike} normalized deviation %")
+    return apply_mc_chart_layout(fig, "Figure 7b: Focus Strike Price Fluctuations (Normalized)", height=360)
+
+
+def p3_r3_autocorrelation_chart(acf_frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    if acf_frame.empty:
+        return apply_mc_chart_layout(fig, "Figure 8: Autocorrelation Plot for Volcanic Rock", height=360)
+
+    for series_name, sub in acf_frame.groupby("series", sort=False):
+        if series_name == "VOLCANIC_ROCK":
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=sub["lag"],
+                y=sub["value"],
+                mode="lines",
+                name=series_name,
+                line={"color": "rgba(190,190,190,0.16)", "width": 1},
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+
+    real = acf_frame[acf_frame["series"] == "VOLCANIC_ROCK"].sort_values("lag")
+    fig.add_trace(
+        go.Scatter(
+            x=real["lag"],
+            y=real["value"],
+            mode="lines",
+            name="VOLCANIC_ROCK",
+            line={"color": "#ff5f5f", "width": 3},
+            hovertemplate="lag=%{x}<br>acf=%{y:.3f}<extra></extra>",
+        )
+    )
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="lag window")
+    fig.update_yaxes(title="autocorrelation")
+    return apply_mc_chart_layout(fig, "Figure 8: Autocorrelation Plot for Volcanic Rock", height=360)
+
+
+def p3_r3_gamma_convexity_chart(
+    spot: float,
+    strike: float,
+    tau_days: float,
+    sigma: float,
+    move_pct: float,
+) -> go.Figure:
+    tau = max(float(tau_days), 0.05) / 365.0
+    _, delta, _, _ = p3_r3_bs_call_metrics(spot, strike, tau, sigma)
+    pct_moves = np.linspace(-float(move_pct), float(move_pct), 121)
+    pnl = []
+    for pct in pct_moves:
+        shifted = spot * (1.0 + pct / 100.0)
+        base, _, _, _ = p3_r3_bs_call_metrics(spot, strike, tau, sigma)
+        nxt, _, _, _ = p3_r3_bs_call_metrics(shifted, strike, tau, sigma)
+        pnl.append(nxt - base - delta * (shifted - spot))
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=pct_moves,
+            y=pnl,
+            mode="lines",
+            name="delta-hedged option PnL",
+            line={"color": "#59c17a", "width": 3},
+            hovertemplate="move=%{x:.2f}%<br>PnL=%{y:.3f}<extra></extra>",
+        )
+    )
+    fig.add_hline(y=0.0, line={"color": "#8792a2", "width": 1, "dash": "dot"})
+    fig.update_xaxes(title="underlying move %")
+    fig.update_yaxes(title="delta-hedged voucher PnL")
+    return apply_mc_chart_layout(fig, "Gamma Scalping Convexity Sketch", height=320)
+
+
+def render_p3_round3_options_page() -> None:
+    options_raw, underlying_raw, trades_raw = load_p3_r3_option_market()
+    if options_raw.empty or underlying_raw.empty:
+        st.warning("Round 3 options data was not found in the local Prosperity 3 resources.")
+        return
+
+    available_days = sorted(int(day) for day in options_raw["day"].dropna().unique())
+    top_row_left, top_row_right = st.columns([0.95, 1.45], gap="medium")
+    with top_row_left:
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">What Frankfurt Hedgehogs Actually Did</div>
+              <div class="mc-note">
+                They did <b>not</b> treat each voucher as an isolated price series. They first compressed the entire option surface into a single object: a volatility smile. Then they traded the <b>residual mispricing</b> of each strike relative to that smile, converted back into price space through Black-Scholes, and only switched the scalper on when the deviation process was lively enough to overcome spread and noise.
+                <br><br>
+                The published README explains the logic; the polished trader reveals the concrete implementation. This dashboard combines both: README-sourced intuition, plus code-level details such as the exact smile coefficients, windows, thresholds, and the fact that the trading rule is based on <b>executable bid/ask mispricing</b>, not midpoint fantasy.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        selected_day = int(
+            st.selectbox(
+                "Historical day",
+                available_days,
+                index=0,
+                format_func=lambda value: f"Round 3 day {value}",
+                key="p3_r3_algo_day",
+            )
+        )
+        days_to_expiry_open = p3_slider_with_number(
+            "Days to expiry at day open",
+            3.0,
+            7.0,
+            5.0,
+            0.25,
+            "p3_r3_algo_days_to_expiry",
+            "Reasonable reconstruction of the remaining time to expiry during the Round 3 option round.",
+        )
+        extrinsic_floor = p3_slider_with_number(
+            "Outlier filter: minimum extrinsic value",
+            0.0,
+            25.0,
+            5.0,
+            0.5,
+            "p3_r3_algo_extrinsic_floor",
+            "They explicitly ignored bottom-left smile outliers with too little extrinsic value.",
+        )
+        scatter_points_per_strike = int(
+            p3_slider_with_number(
+                "Smile scatter sample per strike",
+                150.0,
+                1200.0,
+                400.0,
+                50.0,
+                "p3_r3_algo_scatter_points",
+                "Downsamples the smile cloud so the scatter stays readable and fast.",
+            )
+        )
+    with top_row_right:
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Production Parameters Reverse-Engineered from the Polished Trader</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        fit_mode = st.selectbox(
+            "Smile model used for pricing plots",
+            ("Published Frankfurt fit", "Dashboard refit"),
+            index=0,
+            key="p3_r3_algo_fit_mode",
+        )
+        focus_strike = int(
+            st.selectbox(
+                "Focus strike for price-action view",
+                P3_R3_OPTION_STRIKES,
+                index=2,
+                key="p3_r3_algo_focus_strike",
+            )
+        )
+        random_sample_count = int(
+            p3_slider_with_number(
+                "Random baselines in autocorrelation plot",
+                10.0,
+                120.0,
+                40.0,
+                5.0,
+                "p3_r3_algo_random_samples",
+                "More baselines make the significance picture stronger, but cost more render time.",
+            )
+        )
+        max_lag = int(
+            p3_slider_with_number(
+                "Max lag window in autocorrelation plot",
+                20.0,
+                150.0,
+                100.0,
+                5.0,
+                "p3_r3_algo_max_lag",
+                "Longer windows show whether the negative autocorrelation survives beyond the shortest horizons.",
+            )
+        )
+
+    analysis = build_p3_r3_option_analysis(
+        selected_day=selected_day,
+        days_to_expiry_open=days_to_expiry_open,
+        extrinsic_floor=extrinsic_floor,
+        fit_mode=fit_mode,
+        scatter_points_per_strike=scatter_points_per_strike,
+        random_sample_count=random_sample_count,
+        max_lag=max_lag,
+    )
+    options = analysis["options"]
+    underlying = analysis["underlying"]
+    trades = analysis["trades"]
+    scatter = analysis["scatter"]
+    focus_symbol = f"VOLCANIC_ROCK_VOUCHER_{focus_strike}"
+    focus = options[options["product"] == focus_symbol].sort_values("timestamp").copy()
+    focus_trades = trades[trades["symbol"] == focus_symbol].copy()
+
+    published_coeffs = np.asarray(analysis["published_coeffs"], dtype=float)
+    dynamic_coeffs = np.asarray(analysis["dynamic_coeffs"], dtype=float)
+
+    if options.empty:
+        st.warning("No option rows were available for the chosen settings.")
+        return
+
+    summary_cards = st.columns(4)
+    with summary_cards[0]:
+        mc_card("Published smile fit", f"{published_coeffs[0]:.4f} m^2 + {published_coeffs[1]:.4f} m + {published_coeffs[2]:.4f}", "Hardcoded in their polished file")
+    with summary_cards[1]:
+        mc_card("Dashboard refit", f"{dynamic_coeffs[0]:.4f} m^2 + {dynamic_coeffs[1]:.4f} m + {dynamic_coeffs[2]:.4f}", "Refit from the selected historical day")
+    with summary_cards[2]:
+        mc_card("Scalping windows", f"EMA {P3_R3_THEO_NORM_WINDOW} / switch {P3_R3_IV_SCALPING_WINDOW}", f"activation threshold {P3_R3_IV_SCALPING_THR:.1f}")
+    with summary_cards[3]:
+        mc_card("Mean reversion sleeve", f"VR thr {P3_R3_UNDERLYING_MR_THR:.0f} | 9500 thr {P3_R3_OPTIONS_MR_THR:.0f}", f"windows {P3_R3_UNDERLYING_MR_WINDOW} and {P3_R3_OPTIONS_MR_WINDOW}")
+
+    st.markdown(
+        """
+        <div class="mc-panel">
+          <div class="mc-section-title">Deep Walkthrough</div>
+          <div class="mc-note">
+            <b>1. Re-parameterize the problem in implied-vol space.</b> Voucher prices at different strikes are not directly comparable, but their implied vols are. By mapping each option into <code>(moneyness, IV)</code>, they turned five moving products into one structural curve.
+            <br><br>
+            <b>2. Fit the smile, then trade the residual.</b> The parabola removes the predictable cross-strike shape. What remains is the part they cared about: transient, local richness or cheapness relative to the smile.
+            <br><br>
+            <b>3. Convert back into executable price space.</b> Their production rule is not “mid is rich, so sell”. It is effectively “if the <b>best bid</b> is rich enough relative to theoretical value plus the EMA baseline, hit it”. Same idea on the ask for buys. That means their model already includes spread and execution friction.
+            <br><br>
+            <b>4. Only scalp when the tape is lively.</b> They maintain an EMA of the absolute residual deviation. If that choppiness proxy is below <code>0.7</code>, they switch the scalper off and flatten rather than force trades in dead regimes.
+            <br><br>
+            <b>5. Keep the mean-reversion sleeve deliberately simple.</b> Instead of overfitting a fancy stochastic-vol model, they used fast EMAs and fixed thresholds. The deepest ITM call (<code>9500</code>) served as the options-side mean-reversion instrument because it had the highest delta, so it behaved most like leveraged Volcanic Rock.
+            <br><br>
+            <b>6. Gamma scalping was a positive-EV fallback, not the main engine.</b> They believed convexity plus re-hedging had positive expectancy, but the absolute returns were too small relative to the bigger IV-residual opportunity, so it stayed secondary.
+            <br><br>
+            <b>7. Final portfolio logic was relative-risk aware.</b> Late in the contest they kept some mean-reversion exposure not because it was obviously the highest standalone EV, but because it reduced regret if rival teams were leaning hard into that same angle.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left_chart, right_chart = st.columns([1.1, 1.1], gap="medium")
+    with left_chart:
+        st.plotly_chart(
+            p3_r3_option_smile_chart(scatter, options, published_coeffs, dynamic_coeffs, fit_mode),
+            use_container_width=True,
+        )
+    with right_chart:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Parameter Choices and Why They Matter</div>', unsafe_allow_html=True)
+        parameter_table = pd.DataFrame(
+            [
+                {"Component": "Smile coefficients", "Value": "0.2736, 0.0101, 0.1488", "Interpretation": "Quadratic smile fit hardcoded into Black-Scholes pricing."},
+                {"Component": "THR_OPEN / THR_CLOSE", "Value": "0.5 / 0.0", "Interpretation": "Open only with real edge through the spread; close as soon as the edge is gone."},
+                {"Component": "LOW_VEGA_THR_ADJ", "Value": "0.5", "Interpretation": "Extra caution for low-vega wings where IV estimates are noisy."},
+                {"Component": "THEO_NORM_WINDOW", "Value": "20", "Interpretation": "Fast enough to center short-lived mispricing without following every tick."},
+                {"Component": "IV_SCALPING_WINDOW / THR", "Value": "100 / 0.7", "Interpretation": "Measures whether the deviation process is active enough to scalp."},
+                {"Component": "Scalped strikes", "Value": "9750, 10000, 10250, 10500", "Interpretation": "They left 9500 out of the scalper and used it for the mean-reversion sleeve."},
+                {"Component": "VR / 9500 MR thresholds", "Value": "15 / 5", "Interpretation": "Much larger threshold on the underlying than on the deep ITM call because the scales differ."},
+            ]
+        )
+        mc_table(parameter_table)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Per-Strike Diagnostics</div>', unsafe_allow_html=True)
+        mc_table(analysis["insight_table"])
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    ts_left, ts_right = st.columns(2, gap="medium")
+    with ts_left:
+        st.plotly_chart(
+            p3_r3_multi_strike_timeseries_chart(
+                options,
+                "iv_deviation",
+                "Figure 6b: IV Deviations over Time",
+                "market IV - smile IV",
+            ),
+            use_container_width=True,
+        )
+    with ts_right:
+        st.plotly_chart(
+            p3_r3_multi_strike_timeseries_chart(
+                options,
+                "price_deviation",
+                "Figure 6c: Price Deviations over Time",
+                "market price - theoretical price",
+            ),
+            use_container_width=True,
+        )
+
+    focus_left, focus_right = st.columns(2, gap="medium")
+    with focus_left:
+        st.plotly_chart(
+            p3_r3_focus_price_chart(focus, focus_trades, focus_strike),
+            use_container_width=True,
+        )
+    with focus_right:
+        st.plotly_chart(
+            p3_r3_focus_normalized_chart(focus, focus_strike),
+            use_container_width=True,
+        )
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">How Their Scalper Really Fires</div>
+              <div class="mc-note">
+                For a sell, the operative object is roughly <code>best_bid - fair_price - EMA(price_deviation)</code>. For a buy, it is the same expression at the ask. If the switch variable is below threshold, they do <b>nothing</b> except flatten leftovers. This is why their scalper is selective instead of always-on.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    acf_left, acf_right = st.columns([1.15, 0.95], gap="medium")
+    with acf_left:
+        st.plotly_chart(p3_r3_autocorrelation_chart(analysis["acf_frame"]), use_container_width=True)
+    with acf_right:
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Mean-Reversion Read</div>
+              <div class="mc-note">
+                Their README frames this as a robust sanity check: compare Volcanic Rock’s return autocorrelation to many random baselines. The point was not to estimate a perfect stochastic process. It was to answer a simpler question: “Is negative short-horizon autocorrelation strong enough that a lightweight EMA-threshold trader is defensible?” Their answer was yes — but only as a moderate sleeve, not as the whole book.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">What They Tried But Down-Weighted</div>
+              <div class="mc-note">
+                The README explicitly says gamma scalping looked steadily positive but too small, while pure mean reversion looked promising but riskier and less certain with only a few historical days. That is why the final portfolio is a hybrid: a large, theory-backed IV-residual engine plus a smaller, regret-aware mean-reversion hedge.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    sim_spot = float(
+        p3_slider_with_number(
+            "Gamma sketch: underlying spot",
+            9800.0,
+            10800.0,
+            10325.0,
+            5.0,
+            "p3_r3_gamma_spot",
+            "Interactive convexity sketch for the gamma-scalping idea they discussed but did not prioritize.",
+        )
+    )
+    sim_iv = float(
+        p3_slider_with_number(
+            "Gamma sketch: implied volatility",
+            0.10,
+            0.40,
+            0.20,
+            0.005,
+            "p3_r3_gamma_iv",
+            "Use the smile level you think is relevant for the strike being studied.",
+        )
+    )
+    sim_days = float(
+        p3_slider_with_number(
+            "Gamma sketch: days to expiry",
+            1.0,
+            7.0,
+            5.0,
+            0.25,
+            "p3_r3_gamma_days",
+            "Shorter expiry makes the option more convex but also more exposed to theta decay.",
+        )
+    )
+    sim_move = float(
+        p3_slider_with_number(
+            "Gamma sketch: symmetric move band %",
+            0.25,
+            6.0,
+            2.5,
+            0.25,
+            "p3_r3_gamma_move",
+            "This shows the delta-hedged convexity profile around the current spot.",
+        )
+    )
+
+    gamma_price, gamma_delta, gamma_gamma, gamma_vega = p3_r3_bs_call_metrics(
+        sim_spot,
+        float(focus_strike),
+        sim_days / 365.0,
+        sim_iv,
+    )
+    gamma_cards = st.columns(4)
+    with gamma_cards[0]:
+        mc_card("Gamma sketch price", fmt_number(gamma_price, 2), f"strike {focus_strike}")
+    with gamma_cards[1]:
+        mc_card("Delta", fmt_number(gamma_delta, 3), "Why 9500 behaves most like the underlying")
+    with gamma_cards[2]:
+        mc_card("Gamma", fmt_number(gamma_gamma, 6), "Convexity that powers gamma scalping")
+    with gamma_cards[3]:
+        mc_card("Vega", fmt_number(gamma_vega, 3), "Low-vega wings deserve extra caution")
+
+    st.plotly_chart(
+        p3_r3_gamma_convexity_chart(sim_spot, float(focus_strike), sim_days, sim_iv, sim_move),
+        use_container_width=True,
+    )
+
+    st.markdown(
+        """
+        <div class="mc-panel">
+          <div class="mc-section-title">Bottom Line</div>
+          <div class="mc-note">
+            The deepest insight is that Frankfurt Hedgehogs separated <b>structural pricing</b> from <b>trading execution</b>. Structural pricing came from the smile and Black-Scholes. Execution came from comparing theoretical value to what could actually be hit or lifted. Then they overlaid a regime switch so the scalper only traded when microstructure noise was strong enough, and paired it with a deliberately modest mean-reversion book to hedge outcome risk rather than pretend they could perfectly delta-hedge everything for free.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_p3_reserve_price_page() -> None:
+    st.markdown(
+        '<div class="mc-title">Prosperity 3 Round 3 <span class="mc-chip">manual + algo deep dive</span></div>',
+        unsafe_allow_html=True,
+    )
+    manual_tab, algo_tab = st.tabs(["Manual: Reserve Price", "Algo: Frankfurt Hedgehogs Options"])
+    with manual_tab:
+        render_p3_reserve_manual_page()
+    with algo_tab:
+        render_p3_round3_options_page()
+
+
+def render_p3_container_page() -> None:
+    st.markdown(
+        '<div class="mc-title">Prosperity 3 Round 2 <span class="mc-chip">container game model</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="mc-panel">
+          <div class="mc-section-title">Calibrated Priors Model</div>
+          <div class="mc-note">
+            This model is a small mixture of human strategies, not a curve-fit with lots of knobs. Each strategy creates its own distribution across the multipliers, then the strategy weights combine into the predicted crowd. R4-style inverse Nash and payoff-rank fitting are intentionally excluded here because this page is modeling first-play R2 behavior.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    p3_controls, p3_charts = st.columns([1.0, 2.15], gap="medium")
+    with p3_controls:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Strategy Priors</div>', unsafe_allow_html=True)
+        default_rank_tuple = p3_first_order_rank_tuple()
+        st.session_state.setdefault("p3_known_rank_tuple", default_rank_tuple)
+        for key, default_value in {
+            "p3_nash_weight": 20.0,
+            "p3_high_number_weight": 20.0,
+            "p3_high_number_exponent": 3.0,
+            "p3_avoid_famous_weight": 10.0,
+            "p3_random_weight": 15.0,
+            "p3_nice_numbers_weight": 20.0,
+            "p3_value_hunters_weight": 20.0,
+            "p3_first_order_pnl_weight": 15.0,
+        }.items():
+            st.session_state.setdefault(f"{key}_slider", float(default_value))
+            st.session_state.setdefault(f"{key}_number", float(default_value))
+        for key in [
+            "p3_nash_enabled",
+            "p3_high_number_enabled",
+            "p3_avoid_famous_enabled",
+            "p3_random_enabled",
+            "p3_nice_numbers_enabled",
+            "p3_value_hunters_enabled",
+            "p3_first_order_pnl_enabled",
+        ]:
+            st.session_state.setdefault(key, True)
+
+        enabled_map = {
+            "nash": bool(st.session_state["p3_nash_enabled"]),
+            "high_number": bool(st.session_state["p3_high_number_enabled"]),
+            "avoid_famous": bool(st.session_state["p3_avoid_famous_enabled"]),
+            "random": bool(st.session_state["p3_random_enabled"]),
+            "nice_numbers": bool(st.session_state["p3_nice_numbers_enabled"]),
+            "value_hunters": bool(st.session_state["p3_value_hunters_enabled"]),
+            "first_order_pnl": bool(st.session_state["p3_first_order_pnl_enabled"]),
+        }
+        if st.button("Auto fit % people", type="primary", use_container_width=True):
+            enabled_strategies = tuple(name for name, is_enabled in enabled_map.items() if is_enabled)
+            fit = p3_auto_fit_container_model(
+                enabled_strategies,
+                tuple(int(value) for value in st.session_state["p3_known_rank_tuple"]),
+                "density",
+            )
+            for fit_key in [
+                "p3_nash_weight",
+                "p3_high_number_weight",
+                "p3_high_number_exponent",
+                "p3_avoid_famous_weight",
+                "p3_random_weight",
+                "p3_nice_numbers_weight",
+                "p3_value_hunters_weight",
+                "p3_first_order_pnl_weight",
+            ]:
+                fit_value = round(float(fit[fit_key.replace("p3_", "")]), 2)
+                p3_set_synced_param(fit_key, fit_value)
+
+        fit_rank_left, fit_rank_right = st.columns(2, gap="small")
+        with fit_rank_left:
+            if st.button("Auto fit top 5 ranks", use_container_width=True):
+                enabled_strategies = tuple(name for name, is_enabled in enabled_map.items() if is_enabled)
+                fit = p3_auto_fit_container_model(
+                    enabled_strategies,
+                    tuple(int(value) for value in st.session_state["p3_known_rank_tuple"]),
+                    "rank_top5",
+                )
+                for fit_key in [
+                    "p3_nash_weight",
+                    "p3_high_number_weight",
+                    "p3_high_number_exponent",
+                    "p3_avoid_famous_weight",
+                    "p3_random_weight",
+                    "p3_nice_numbers_weight",
+                    "p3_value_hunters_weight",
+                    "p3_first_order_pnl_weight",
+                ]:
+                    fit_value = round(float(fit[fit_key.replace("p3_", "")]), 2)
+                    p3_set_synced_param(fit_key, fit_value)
+        with fit_rank_right:
+            if st.button("Auto fit profit", use_container_width=True):
+                enabled_strategies = tuple(name for name, is_enabled in enabled_map.items() if is_enabled)
+                fit = p3_auto_fit_container_model(
+                    enabled_strategies,
+                    tuple(int(value) for value in st.session_state["p3_known_rank_tuple"]),
+                    "profit",
+                )
+                for fit_key in [
+                    "p3_nash_weight",
+                    "p3_high_number_weight",
+                    "p3_high_number_exponent",
+                    "p3_avoid_famous_weight",
+                    "p3_random_weight",
+                    "p3_nice_numbers_weight",
+                    "p3_value_hunters_weight",
+                    "p3_first_order_pnl_weight",
+                ]:
+                    fit_value = round(float(fit[fit_key.replace("p3_", "")]), 2)
+                    p3_set_synced_param(fit_key, fit_value)
+
+        st.caption("Turn a strategy off to exclude it from both the live model and the auto-fit.")
+        st.caption("The current x-rank list stays fixed; the three autofit buttons optimize weights against different targets.")
+
+        p3_nash_enabled = st.toggle("Use Nash", key="p3_nash_enabled")
+        p3_nash_weight = p3_slider_with_number(
+            "Nash",
+            0.0,
+            100.0,
+            20.0,
+            0.5,
+            "p3_nash_weight",
+            disabled=not p3_nash_enabled,
+        )
+
+        p3_high_number_enabled = st.toggle("Use High-number exponential", key="p3_high_number_enabled")
+        p3_high_number_weight = p3_slider_with_number(
+            "High-number exponential",
+            0.0,
+            100.0,
+            20.0,
+            0.5,
+            "p3_high_number_weight",
+            "People who mostly look at the larger multipliers.",
+            disabled=not p3_high_number_enabled,
+        )
+        p3_high_number_exponent = p3_slider_with_number(
+            "High-number exponent",
+            0.5,
+            8.0,
+            3.0,
+            0.25,
+            "p3_high_number_exponent",
+            "Higher exponent concentrates this strategy harder into the biggest multipliers.",
+            disabled=not p3_high_number_enabled,
+        )
+        p3_avoid_famous_enabled = st.toggle("Use Famous-number avoiders", key="p3_avoid_famous_enabled")
+        p3_avoid_famous_weight = p3_slider_with_number(
+            "Famous-number avoiders",
+            0.0,
+            100.0,
+            10.0,
+            0.5,
+            "p3_avoid_famous_weight",
+            "People avoiding obvious/suspicious non-random numbers: 10, 20, 37, 50, 90.",
+            disabled=not p3_avoid_famous_enabled,
+        )
+        p3_random_enabled = st.toggle("Use Random", key="p3_random_enabled")
+        p3_random_weight = p3_slider_with_number(
+            "Random",
+            0.0,
+            100.0,
+            15.0,
+            0.5,
+            "p3_random_weight",
+            disabled=not p3_random_enabled,
+        )
+        p3_nice_numbers_enabled = st.toggle("Use Nice numbers", key="p3_nice_numbers_enabled")
+        p3_nice_numbers_weight = p3_slider_with_number(
+            "Nice numbers",
+            0.0,
+            100.0,
+            20.0,
+            0.5,
+            "p3_nice_numbers_weight",
+            disabled=not p3_nice_numbers_enabled,
+        )
+        p3_value_hunters_enabled = st.toggle("Use Value hunters", key="p3_value_hunters_enabled")
+        p3_value_hunters_weight = p3_slider_with_number(
+            "Value hunters",
+            0.0,
+            100.0,
+            20.0,
+            0.5,
+            "p3_value_hunters_weight",
+            disabled=not p3_value_hunters_enabled,
+        )
+        p3_first_order_pnl_enabled = st.toggle("Use infer p_f from known payoff rank", key="p3_first_order_pnl_enabled")
+        p3_first_order_pnl_weight = p3_slider_with_number(
+            "Infer p_f from known payoff rank",
+            0.0,
+            100.0,
+            15.0,
+            0.5,
+            "p3_first_order_pnl_weight",
+            "Use the known final payoff ordering and invert the payoff formula to estimate crowd densities p_f that would produce that ranking.",
+            disabled=not p3_first_order_pnl_enabled,
+        )
+        if not any([
+            p3_nash_enabled,
+            p3_high_number_enabled,
+            p3_avoid_famous_enabled,
+            p3_random_enabled,
+            p3_nice_numbers_enabled,
+            p3_value_hunters_enabled,
+            p3_first_order_pnl_enabled,
+        ]):
+            st.warning("All strategies are off, so the chart falls back to a neutral random mix for display.")
+        p3_model = p3_container_modeled_frame(
+            p3_nash_weight if p3_nash_enabled else 0.0,
+            p3_high_number_weight if p3_high_number_enabled else 0.0,
+            p3_avoid_famous_weight if p3_avoid_famous_enabled else 0.0,
+            p3_random_weight if p3_random_enabled else 0.0,
+            p3_nice_numbers_weight if p3_nice_numbers_enabled else 0.0,
+            p3_value_hunters_weight if p3_value_hunters_enabled else 0.0,
+            p3_first_order_pnl_weight if p3_first_order_pnl_enabled else 0.0,
+            p3_high_number_exponent,
+            tuple(int(value) for value in st.session_state["p3_known_rank_tuple"]),
+        )
+        strategy_weights = {
+            "nash_weight": float(p3_model["nash_strategy_weight"].iloc[0]),
+            "high_number_weight": float(p3_model["high_number_strategy_weight"].iloc[0]),
+            "avoid_famous_weight": float(p3_model["avoid_famous_strategy_weight"].iloc[0]),
+            "random_weight": float(p3_model["random_strategy_weight"].iloc[0]),
+            "nice_numbers_weight": float(p3_model["nice_numbers_strategy_weight"].iloc[0]),
+            "value_hunters_weight": float(p3_model["value_hunters_strategy_weight"].iloc[0]),
+            "first_order_pnl_weight": float(p3_model["first_order_pnl_strategy_weight"].iloc[0]),
+        }
+        mae = float(p3_model["absolute_error"].mean())
+        rmse = math.sqrt(float((p3_model["model_error"] ** 2).mean()))
+        best_container = p3_model.sort_values("modeled_density", ascending=False).iloc[0]
+        mc_card(
+            "Normalized total",
+            "100%",
+            "Entered strategy weights are normalized automatically.",
+        )
+        mc_card(
+            "Mean absolute error",
+            f"{mae:.2f} pp",
+            f"RMSE {rmse:.2f} percentage points.",
+        )
+        mc_card(
+            "Model crowd favorite",
+            f"x{int(best_container['multiplier'])}",
+            f"Modeled density {float(best_container['modeled_density']):.2f}%.",
+        )
+        st.caption("Each slider is a strategy share. The exact boxes let you type weights directly; the model normalizes all weights to 100%.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Component Meaning</div>', unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class="mc-note">
+            <b>Nash:</b> players follow the equilibrium table.<br>
+            <b>High-number exponential:</b> players increasingly favor larger multipliers; the exponent controls concentration.<br>
+            <b>Famous-number avoiders:</b> players avoid known non-random/famous numbers: 10, 20, 37, 50, 90.<br>
+            <b>Random:</b> uniform first-order randomness.<br>
+            <b>Nice numbers:</b> 3/7/73 psychological pull.<br>
+            <b>Value hunters:</b> high multiplier per fixed inhabitant.<br>
+            <b>Infer p_f from known payoff rank:</b> players assume the final payoff ordering is already known. They keep only that order, fit a simple monotone payoff ladder across ranks, and invert the payoff formula to estimate the crowd densities <b>p_f</b> behind that ranking.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Calibrated Prior Weights</div>', unsafe_allow_html=True)
+        mc_table(p3_strategy_prior_table(strategy_weights))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with p3_charts:
+        st.plotly_chart(
+            p3_container_chart(p3_model),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Strategy Weights By Multiplier</div>', unsafe_allow_html=True)
+        mc_table(p3_strategy_multiplier_table(p3_model))
+        st.markdown(
+            '<div class="mc-note">Each strategy column is the distribution that strategy assigns across multipliers before the global strategy weights are applied.</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Payoff Function</div>
+              <div class="mc-note">
+                For a container with multiplier <b>M</b>, fixed inhabitants <b>I</b>, and crowd density <b>d%</b>:
+                <br><b>Payoff = M × 10,000 / (d + I)</b>.
+                Lower crowd density increases payoff; higher multiplier increases payoff.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Naive First-Order Table</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mc-note">Assumption: the crowd share on each island is directly proportional to <b>M_f</b>, so <b>p_f = 100 × M_f / ΣM_f</b>. This gives a first-pass payoff table. From that table, keep only the payoff ordering; that ordering is treated as the known final payoff ranking for this category.</div>',
+            unsafe_allow_html=True,
+        )
+        mc_table(p3_first_order_payoff_table(p3_model))
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Reverse-Engineered Crowd For This Strategy</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mc-note">This table estimates how many people chose each multiplier once the final payoff ranking is assumed known. The estimator uses that ranking only, assigns linear payoff tiers across the ranks, and then inverts <b>PnL = M_f × 10,000 / (p_f + I_f)</b> to solve for the implied crowd shares <b>p_f</b>.</div>',
+            unsafe_allow_html=True,
+        )
+        mc_table(p3_rank_implied_crowd_table(p3_model))
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.plotly_chart(
+            p3_payout_proxy_chart(p3_model),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Predicted Payoffs vs Actual Payoffs</div>', unsafe_allow_html=True)
+        mc_table(p3_payoff_comparison_table(p3_model))
+        st.markdown("</div>", unsafe_allow_html=True)
+        p3_error_left, p3_table_right = st.columns([1.0, 1.25], gap="medium")
+        with p3_error_left:
+            st.plotly_chart(
+                p3_container_error_chart(p3_model),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
+        with p3_table_right:
+            st.markdown('<div class="mc-panel"><div class="mc-section-title">Container Table</div>', unsafe_allow_html=True)
+            mc_table(p3_container_table(p3_model))
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="mc-title">Full-Width Behavior Readout <span class="mc-chip">model anatomy</span></div>', unsafe_allow_html=True)
+    more_left, more_right = st.columns([1, 1], gap="medium")
+    with more_left:
+        st.plotly_chart(
+            p3_component_contribution_chart(p3_model),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+    with more_right:
+        st.plotly_chart(
+            p3_payoff_difference_chart(p3_model),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+    st.plotly_chart(
+        p3_human_vs_nash_difference_chart(p3_model),
+        use_container_width=True,
+        config={"displaylogo": False},
+    )
+    st.markdown(
+        '<div class="mc-title">Correlation Lab <span class="mc-chip">behavior features</span></div>',
+        unsafe_allow_html=True,
+    )
+    target_options = {
+        "Actual human density": "actual_density",
+        "Human - Nash difference": "human_minus_nash",
+        "Model predicted density": "model_predicted",
+        "Model - actual error": "model_minus_actual",
+    }
+    selected_target_label = st.selectbox(
+        "Correlation target",
+        list(target_options.keys()),
+        index=1,
+        key="p3_correlation_target",
+    )
+    correlation_frame = p3_correlation_table(p3_model, target_options[selected_target_label])
+    st.plotly_chart(
+        p3_correlation_chart(correlation_frame, selected_target_label),
+        use_container_width=True,
+        config={"displaylogo": False},
+    )
+    st.markdown('<div class="mc-panel"><div class="mc-section-title">Correlation Table</div>', unsafe_allow_html=True)
+    mc_table(p3_correlation_display_table(correlation_frame))
+    st.markdown(
+        '<div class="mc-note">Only 10 containers exist, so treat these as directional clues, not proof. Pearson checks linear relation; Spearman checks rank relation.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('<div class="mc-panel"><div class="mc-section-title">What The Correlations Mean</div>', unsafe_allow_html=True)
+    mc_table(p3_correlation_interpretation_table(correlation_frame, selected_target_label))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def p3_r4_suitcase_base_frame() -> pd.DataFrame:
+    rows = [
+        {"suitcase_id": "D2", "multiplier": 79, "inhabitants": 5, "nash_density": 8.954},
+        {"suitcase_id": "C3", "multiplier": 73, "inhabitants": 4, "nash_density": 8.894},
+        {"suitcase_id": "B4", "multiplier": 70, "inhabitants": 4, "nash_density": 8.364},
+        {"suitcase_id": "A1", "multiplier": 80, "inhabitants": 6, "nash_density": 8.131},
+        {"suitcase_id": "B1", "multiplier": 89, "inhabitants": 8, "nash_density": 7.720},
+        {"suitcase_id": "A3", "multiplier": 83, "inhabitants": 7, "nash_density": 7.660},
+        {"suitcase_id": "A5", "multiplier": 60, "inhabitants": 4, "nash_density": 6.598},
+        {"suitcase_id": "B5", "multiplier": 90, "inhabitants": 10, "nash_density": 5.897},
+        {"suitcase_id": "D4", "multiplier": 47, "inhabitants": 3, "nash_density": 5.302},
+        {"suitcase_id": "A2", "multiplier": 50, "inhabitants": 4, "nash_density": 4.832},
+        {"suitcase_id": "D1", "multiplier": 41, "inhabitants": 3, "nash_density": 4.242},
+        {"suitcase_id": "C2", "multiplier": 40, "inhabitants": 3, "nash_density": 4.066},
+        {"suitcase_id": "B3", "multiplier": 37, "inhabitants": 3, "nash_density": 3.536},
+        {"suitcase_id": "A4", "multiplier": 31, "inhabitants": 2, "nash_density": 3.476},
+        {"suitcase_id": "D5", "multiplier": 30, "inhabitants": 2, "nash_density": 3.299},
+        {"suitcase_id": "C4", "multiplier": 100, "inhabitants": 15, "nash_density": 2.663},
+        {"suitcase_id": "D3", "multiplier": 23, "inhabitants": 2, "nash_density": 2.063},
+        {"suitcase_id": "C1", "multiplier": 17, "inhabitants": 1, "nash_density": 2.003},
+        {"suitcase_id": "C5", "multiplier": 20, "inhabitants": 2, "nash_density": 1.533},
+        {"suitcase_id": "B2", "multiplier": 10, "inhabitants": 1, "nash_density": 0.767},
+    ]
+    frame = pd.DataFrame(rows)
+    frame["nash_density"] = 100.0 * frame["nash_density"] / float(frame["nash_density"].sum())
+    frame["nash_payoff"] = p3_container_payoff(
+        frame["multiplier"],
+        frame["nash_density"],
+        frame["inhabitants"],
+    )
+    frame["nash_rank"] = frame["nash_payoff"].rank(ascending=False, method="min").astype(int)
+    return frame
+
+
+def p3_r4_suitcase_components(concentrated_exponent: float = 1.6) -> pd.DataFrame:
+    frame = p3_r4_suitcase_base_frame().copy()
+    multipliers = pd.to_numeric(frame["multiplier"], errors="coerce").astype(float)
+    nash_density = pd.to_numeric(frame["nash_density"], errors="coerce").astype(float)
+
+    frame["nash_component"] = normalize_component(nash_density)
+    frame["conc_nash_component"] = normalize_component(
+        np.power(nash_density.clip(lower=0.0001), max(0.25, float(concentrated_exponent)))
+    )
+    frame["inverse_nash_component"] = normalize_component(1.0 / nash_density.clip(lower=0.15))
+    frame["random_component"] = normalize_component(np.ones(len(frame)))
+    frame["nice_component"] = normalize_component(p3_digit_bias_scores(frame["multiplier"]))
+    frame["high_multiplier_component"] = normalize_component(np.power(multipliers, 1.15))
+    return frame
+
+
+def p3_r4_modeled_frame(
+    nash_weight: float,
+    conc_nash_weight: float,
+    inverse_nash_weight: float,
+    random_weight: float,
+    nice_weight: float,
+    high_multiplier_weight: float,
+    concentrated_exponent: float,
+) -> pd.DataFrame:
+    frame = p3_r4_suitcase_components(concentrated_exponent).copy()
+    raw_weights = {
+        "nash": max(0.0, float(nash_weight)),
+        "conc_nash": max(0.0, float(conc_nash_weight)),
+        "inverse_nash": max(0.0, float(inverse_nash_weight)),
+        "random": max(0.0, float(random_weight)),
+        "nice": max(0.0, float(nice_weight)),
+        "high_multiplier": max(0.0, float(high_multiplier_weight)),
+    }
+    total_weight = float(sum(raw_weights.values()))
+    if total_weight <= 0.0:
+        raw_weights["random"] = 1.0
+        total_weight = 1.0
+
+    modeled_density = pd.Series([0.0] * len(frame), index=frame.index, dtype=float)
+    for strategy_name, component_name in [
+        ("nash", "nash_component"),
+        ("conc_nash", "conc_nash_component"),
+        ("inverse_nash", "inverse_nash_component"),
+        ("random", "random_component"),
+        ("nice", "nice_component"),
+        ("high_multiplier", "high_multiplier_component"),
+    ]:
+        normalized_weight = raw_weights[strategy_name] / total_weight
+        frame[f"{strategy_name}_strategy_weight"] = normalized_weight * 100.0
+        frame[f"{strategy_name}_contribution"] = normalized_weight * frame[component_name]
+        modeled_density += frame[f"{strategy_name}_contribution"]
+
+    frame["modeled_density"] = modeled_density
+    frame["modeled_payoff"] = p3_container_payoff(
+        frame["multiplier"],
+        frame["modeled_density"],
+        frame["inhabitants"],
+    )
+    frame["modeled_rank"] = frame["modeled_payoff"].rank(ascending=False, method="min").astype(int)
+    frame["nash_vs_model_density_pp"] = frame["modeled_density"] - frame["nash_density"]
+    frame["nash_vs_model_payoff"] = frame["modeled_payoff"] - frame["nash_payoff"]
+    return frame.sort_values(["nash_density", "multiplier"], ascending=[False, False]).reset_index(drop=True)
+
+
+def p3_r4_strategy_prior_table(frame: pd.DataFrame) -> pd.DataFrame:
+    rows = [
+        {
+            "Strategy": "Nash",
+            "R4 weight %": frame["nash_strategy_weight"].iloc[0],
+            "Logic": "Players mostly follow the equilibrium allocation.",
+        },
+        {
+            "Strategy": "Concentrated Nash",
+            "R4 weight %": frame["conc_nash_strategy_weight"].iloc[0],
+            "Logic": "Some people over-index the already-crowded Nash favorites.",
+        },
+        {
+            "Strategy": "Inverse Nash",
+            "R4 weight %": frame["inverse_nash_strategy_weight"].iloc[0],
+            "Logic": "Some players over-correct and hunt the Nash under-owned tail.",
+        },
+        {
+            "Strategy": "Random",
+            "R4 weight %": frame["random_strategy_weight"].iloc[0],
+            "Logic": "Pure first-order randomness across the suitcase grid.",
+        },
+        {
+            "Strategy": "Nice numbers",
+            "R4 weight %": frame["nice_strategy_weight"].iloc[0],
+            "Logic": "Memorable 3/7-style numbers and psychologically sticky multipliers.",
+        },
+        {
+            "Strategy": "High multipliers",
+            "R4 weight %": frame["high_multiplier_strategy_weight"].iloc[0],
+            "Logic": "Greedy pull toward the largest raw multipliers.",
+        },
+    ]
+    output = pd.DataFrame(rows)
+    output["R4 weight %"] = output["R4 weight %"].map(lambda value: f"{float(value):.1f}")
+    return output
+
+
+def p3_r4_suitcase_table(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame[
+        [
+            "suitcase_id",
+            "multiplier",
+            "inhabitants",
+            "nash_density",
+            "modeled_density",
+            "nash_payoff",
+            "modeled_payoff",
+            "nash_rank",
+            "modeled_rank",
+        ]
+    ].copy()
+    output.columns = [
+        "id",
+        "mult",
+        "inhab",
+        "Nash %",
+        "Pred %",
+        "Nash payoff",
+        "Pred payoff",
+        "Nash rank",
+        "Pred rank",
+    ]
+    for column in ["Nash %", "Pred %"]:
+        output[column] = output[column].map(lambda value: f"{float(value):.2f}")
+    for column in ["Nash payoff", "Pred payoff"]:
+        output[column] = output[column].map(lambda value: f"{float(value):,.0f}")
+    return output
+
+
+def p3_r4_component_table(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame[
+        [
+            "suitcase_id",
+            "nash_component",
+            "conc_nash_component",
+            "inverse_nash_component",
+            "random_component",
+            "nice_component",
+            "high_multiplier_component",
+            "modeled_density",
+        ]
+    ].copy()
+    output.columns = [
+        "id",
+        "Nash %",
+        "Conc Nash %",
+        "Inv Nash %",
+        "Random %",
+        "Nice %",
+        "High mult %",
+        "Model %",
+    ]
+    for column in output.columns:
+        if column != "id":
+            output[column] = output[column].map(lambda value: f"{float(value):.2f}")
+    return output
+
+
+def p3_r4_strategy_distribution_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    traces = [
+        ("Nash", "nash_component", "#4e79a7"),
+        ("Concentrated Nash", "conc_nash_component", "#f28e2b"),
+        ("Inverse Nash", "inverse_nash_component", "#59a14f"),
+        ("Random", "random_component", "#8a8f98"),
+        ("Nice numbers", "nice_component", "#b07aa1"),
+        ("Model predicted", "modeled_density", "#e15759"),
+    ]
+    for name, column, color in traces:
+        fig.add_trace(
+            go.Bar(
+                x=frame["suitcase_id"],
+                y=frame[column],
+                name=name,
+                marker_color=color,
+                hovertemplate=f"{name}<br>%{{x}}<br>%{{y:.2f}}%<extra></extra>",
+            )
+        )
+    fig.update_layout(barmode="group")
+    fig.update_xaxes(title="Suitcase ID (sorted by Nash density)")
+    fig.update_yaxes(title="Probability / density (%)")
+    return apply_mc_chart_layout(fig, "Prosperity 3 Round 4 · Calibrated Priors", height=460)
+
+
+def p3_r4_payoff_chart(frame: pd.DataFrame) -> go.Figure:
+    ranked = frame.sort_values(["modeled_payoff", "multiplier"], ascending=[False, False]).copy()
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=ranked["suitcase_id"],
+            y=ranked["nash_payoff"],
+            name="Nash payoff",
+            marker_color="#4e79a7",
+            hovertemplate="%{x}<br>Nash payoff %{y:,.0f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=ranked["suitcase_id"],
+            y=ranked["modeled_payoff"],
+            name="Predicted payoff",
+            marker_color="#e15759",
+            text=[f"#{rank}" for rank in ranked["modeled_rank"]],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{x}<br>Pred payoff %{y:,.0f}<extra></extra>",
+        )
+    )
+    fig.update_layout(barmode="group")
+    fig.update_xaxes(title="Suitcase ID (sorted by predicted payoff)")
+    fig.update_yaxes(title="Payoff")
+    return apply_mc_chart_layout(fig, "Predicted Payoff By Suitcase", height=420)
+
+
+def p3_r4_combo_frame(frame: pd.DataFrame, pick_count: int) -> pd.DataFrame:
+    if pick_count not in {1, 2, 3}:
+        raise ValueError("pick_count must be 1, 2, or 3")
+    rows = []
+    opening_cost = 0 if pick_count == 1 else 50_000 if pick_count == 2 else 150_000
+    for combo in itertools.combinations(frame.itertuples(index=False), pick_count):
+        ids = ", ".join(item.suitcase_id for item in combo)
+        multipliers = ", ".join(f"x{int(item.multiplier)}" for item in combo)
+        nash_gross = float(sum(float(item.nash_payoff) for item in combo))
+        modeled_gross = float(sum(float(item.modeled_payoff) for item in combo))
+        rows.append(
+            {
+                "Suitcases": ids,
+                "Multipliers": multipliers,
+                "Nash gross": nash_gross,
+                "Pred gross": modeled_gross,
+                "Open cost": float(opening_cost),
+                "Nash net": nash_gross - opening_cost,
+                "Pred net": modeled_gross - opening_cost,
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["Pred net", "Nash net"], ascending=[False, False]).reset_index(drop=True)
+
+
+def p3_r4_combo_display_table(frame: pd.DataFrame, pick_count: int, limit: int = 12) -> pd.DataFrame:
+    combos = p3_r4_combo_frame(frame, pick_count).head(limit).copy()
+    for column in ["Nash gross", "Pred gross", "Open cost", "Nash net", "Pred net"]:
+        combos[column] = combos[column].map(lambda value: f"{float(value):,.0f}")
+    return combos
+
+
+def p3_r4_notebook_model_coefficients() -> np.ndarray:
+    training = np.array(
+        [
+            [10, 1, 0.00998],
+            [80, 6, 0.18178],
+            [37, 3, 0.05118],
+            [17, 1, 0.07539],
+            [90, 10, 0.11807],
+            [31, 2, 0.06987],
+            [50, 4, 0.08516],
+            [20, 2, 0.01614],
+            [73, 4, 0.24060],
+            [89, 8, 0.15184],
+            [100, 8, 0.04900],
+        ],
+        dtype=float,
+    )
+    x = np.column_stack([np.ones(len(training)), training[:, 0], training[:, 1]])
+    y = training[:, 2]
+    return np.linalg.lstsq(x, y, rcond=None)[0]
+
+
+def p3_r4_notebook_predict_share(multiplier: pd.Series, inhabitants: pd.Series) -> pd.Series:
+    beta = p3_r4_notebook_model_coefficients()
+    predicted = beta[0] + beta[1] * pd.to_numeric(multiplier, errors="coerce") + beta[2] * pd.to_numeric(
+        inhabitants,
+        errors="coerce",
+    )
+    return pd.Series(predicted, dtype=float).clip(lower=0.0)
+
+
+def p3_r4_notebook_results_frame() -> pd.DataFrame:
+    frame = p3_r4_suitcase_base_frame().copy()
+    frame["notebook_share"] = p3_r4_notebook_predict_share(frame["multiplier"], frame["inhabitants"])
+    frame["notebook_density"] = 100.0 * frame["notebook_share"]
+    frame["notebook_payoff"] = p3_container_payoff(
+        frame["multiplier"],
+        frame["notebook_density"],
+        frame["inhabitants"],
+    )
+    frame["notebook_rank"] = frame["notebook_payoff"].rank(ascending=False, method="min").astype(int)
+    frame["notebook_minus_nash_pp"] = frame["notebook_density"] - frame["nash_density"]
+    return frame.sort_values(["notebook_payoff", "multiplier"], ascending=[False, False]).reset_index(drop=True)
+
+
+def p3_r4_notebook_accuracy_table() -> pd.DataFrame:
+    beta = p3_r4_notebook_model_coefficients()
+    train = pd.DataFrame(
+        [
+            [10, 1, 0.00998],
+            [80, 6, 0.18178],
+            [37, 3, 0.05118],
+            [17, 1, 0.07539],
+            [90, 10, 0.11807],
+            [31, 2, 0.06987],
+            [50, 4, 0.08516],
+            [20, 2, 0.01614],
+            [73, 4, 0.24060],
+            [89, 8, 0.15184],
+            [100, 8, 0.04900],
+        ],
+        columns=["multiplier", "inhabitants", "actual_share"],
+    )
+    old = pd.DataFrame(
+        [
+            [24, 2, 0.015],
+            [70, 4, 0.082],
+            [41, 3, 0.019],
+            [21, 2, 0.000],
+            [60, 4, 0.037],
+            [47, 3, 0.030],
+            [82, 5, 0.062],
+            [87, 5, 0.098],
+            [80, 5, 0.041],
+            [35, 3, 0.012],
+            [73, 4, 0.113],
+            [89, 5, 0.108],
+            [100, 8, 0.049],
+            [90, 7, 0.034],
+            [17, 2, 0.006],
+            [77, 5, 0.046],
+            [83, 5, 0.054],
+            [85, 5, 0.065],
+            [79, 5, 0.054],
+            [55, 4, 0.026],
+            [12, 2, 0.000],
+            [27, 3, 0.000],
+            [52, 4, 0.019],
+            [15, 2, 0.000],
+            [30, 3, 0.000],
+        ],
+        columns=["multiplier", "inhabitants", "actual_share"],
+    )
+
+    rows = []
+    for label, data in [("R2 training fit", train), ("Old suitcase validation", old)]:
+        predicted = beta[0] + beta[1] * data["multiplier"] + beta[2] * data["inhabitants"]
+        predicted = predicted.clip(lower=0.0)
+        err = predicted - data["actual_share"]
+        mae = float(err.abs().mean())
+        rmse = float(np.sqrt(np.mean(np.square(err))))
+        rows.append(
+            {
+                "Check": label,
+                "MAE": f"{mae * 100.0:.2f} pp",
+                "RMSE": f"{rmse * 100.0:.2f} pp",
+                "Meaning": "Average miss in crowd-share percentage points.",
+            }
+        )
+    rows.append(
+        {
+            "Check": "Linear prior",
+            "MAE": f"share = {beta[0]:+.4f} {beta[1]:+.4f}*M {beta[2]:+.4f}*I",
+            "RMSE": "",
+            "Meaning": "Same model as Manual R4 notebook, recomputed without sklearn.",
+        }
+    )
+    return pd.DataFrame(rows)
+
+
+def p3_r4_notebook_suitcase_table(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame[
+        [
+            "suitcase_id",
+            "multiplier",
+            "inhabitants",
+            "nash_density",
+            "notebook_density",
+            "notebook_minus_nash_pp",
+            "notebook_payoff",
+            "notebook_rank",
+        ]
+    ].copy()
+    output.columns = [
+        "id",
+        "mult",
+        "inhab",
+        "Nash %",
+        "Notebook %",
+        "Notebook - Nash pp",
+        "Notebook payoff",
+        "Notebook rank",
+    ]
+    for column in ["Nash %", "Notebook %", "Notebook - Nash pp"]:
+        output[column] = output[column].map(lambda value: f"{float(value):+.2f}" if "minus" in column.lower() or "pp" in column else f"{float(value):.2f}")
+    output["Notebook payoff"] = output["Notebook payoff"].map(lambda value: f"{float(value):,.0f}")
+    return output
+
+
+def p3_r4_notebook_combo_frame(frame: pd.DataFrame, pick_count: int) -> pd.DataFrame:
+    rows = []
+    opening_cost = 0 if pick_count == 1 else 50_000 if pick_count == 2 else 150_000
+    for combo in itertools.combinations(frame.itertuples(index=False), pick_count):
+        ids = ", ".join(item.suitcase_id for item in combo)
+        multipliers = ", ".join(f"x{int(item.multiplier)}" for item in combo)
+        gross = float(sum(float(item.notebook_payoff) for item in combo))
+        rows.append(
+            {
+                "Suitcases": ids,
+                "Multipliers": multipliers,
+                "Notebook gross": gross,
+                "Open cost": float(opening_cost),
+                "Notebook net": gross - opening_cost,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("Notebook net", ascending=False).reset_index(drop=True)
+
+
+def p3_r4_notebook_combo_display_table(frame: pd.DataFrame, pick_count: int, limit: int = 10) -> pd.DataFrame:
+    output = p3_r4_notebook_combo_frame(frame, pick_count).head(limit).copy()
+    for column in ["Notebook gross", "Open cost", "Notebook net"]:
+        output[column] = output[column].map(lambda value: f"{float(value):,.0f}")
+    return output
+
+
+def p3_r4_notebook_density_chart(frame: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    ranked = frame.sort_values(["notebook_payoff", "multiplier"], ascending=[False, False])
+    fig.add_trace(
+        go.Bar(
+            x=ranked["suitcase_id"],
+            y=ranked["nash_density"],
+            name="Nash %",
+            marker_color="#4e79a7",
+            hovertemplate="%{x}<br>Nash %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=ranked["suitcase_id"],
+            y=ranked["notebook_density"],
+            name="Notebook prior %",
+            marker_color="#f2c14e",
+            hovertemplate="%{x}<br>Notebook %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.update_layout(barmode="group")
+    fig.update_xaxes(title="Suitcase ID (sorted by notebook payoff)")
+    fig.update_yaxes(title="Crowd share (%)")
+    return apply_mc_chart_layout(fig, "Manual R4 Notebook Prior vs Nash", height=420)
+
+
+def p3_r4_notebook_payoff_chart(frame: pd.DataFrame) -> go.Figure:
+    ranked = frame.sort_values(["notebook_payoff", "multiplier"], ascending=[False, False])
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=ranked["suitcase_id"],
+            y=ranked["notebook_payoff"],
+            marker_color="#6ccf9c",
+            text=[f"#{rank}" for rank in ranked["notebook_rank"]],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="%{x}<br>Notebook payoff %{y:,.0f}<extra></extra>",
+            name="Notebook payoff",
+        )
+    )
+    fig.update_xaxes(title="Suitcase ID")
+    fig.update_yaxes(title="Payoff before opening cost")
+    return apply_mc_chart_layout(fig, "Manual R4 Notebook Result Payoffs", height=420)
+
+
+def volterra_kernel_equation(kernel: str) -> tuple[str, str]:
+    if kernel == "Fractional / rough":
+        return (
+            r"K(u)=\frac{u^{H-\frac12}}{\Gamma(H+\frac12)}",
+            "Power-law memory. Small H makes the process rough and strongly sensitive to the most recent shocks.",
+        )
+    if kernel == "Exponential":
+        return (
+            r"K(u)=e^{-\lambda u}",
+            "Short-memory kernel. The influence of old shocks decays exponentially fast.",
+        )
+    if kernel == "Mixed fractional + exponential":
+        return (
+            r"K(u)=0.65\frac{u^{H-\frac12}}{\Gamma(H+\frac12)}+0.35e^{-\lambda u}",
+            "Hybrid kernel: rough near zero, but with an explicit finite-memory exponential tail.",
+        )
+    return (
+        r"K(u)=\text{user-defined expression}",
+        "Custom kernel entered directly in terms of u, H, and lambda_decay.",
+    )
+
+
+def volterra_custom_kernel_values(expression: str, lags: np.ndarray, hurst: float, decay: float) -> np.ndarray:
+    safe_globals = {"__builtins__": {}}
+    gamma_fn = np.vectorize(math.gamma, otypes=[float])
+    safe_locals = {
+        "u": lags,
+        "H": float(hurst),
+        "lambda_decay": float(decay),
+        "lam": float(decay),
+        "np": np,
+        "exp": np.exp,
+        "sqrt": np.sqrt,
+        "log": np.log,
+        "sin": np.sin,
+        "cos": np.cos,
+        "abs": np.abs,
+        "minimum": np.minimum,
+        "maximum": np.maximum,
+        "clip": np.clip,
+        "where": np.where,
+        "gamma": gamma_fn,
+        "pi": math.pi,
+    }
+    fallback_expression = "u**(H-0.5)/gamma(H+0.5)"
+    fallback_values = np.power(lags, float(hurst) - 0.5) / math.gamma(float(hurst) + 0.5)
+
+    try:
+        values = eval(expression, safe_globals, safe_locals)
+        array = np.asarray(values, dtype=float)
+        if array.ndim == 0:
+            array = np.full_like(lags, float(array), dtype=float)
+        if array.shape != lags.shape:
+            array = np.broadcast_to(array, lags.shape).astype(float)
+        if not np.all(np.isfinite(array)):
+            raise ValueError("Custom kernel produced NaN or inf values.")
+        st.session_state["volterra_custom_kernel_error"] = ""
+        return array
+    except Exception as exc:
+        st.session_state["volterra_custom_kernel_error"] = (
+            f"Invalid custom kernel expression `{expression}`. "
+            f"Falling back to `{fallback_expression}`. "
+            f"Details: {exc}"
+        )
+        return fallback_values
+
+
+def volterra_kernel_values(
+    kernel: str,
+    dt: float,
+    steps: int,
+    hurst: float,
+    decay: float,
+    custom_expression: str | None = None,
+) -> np.ndarray:
+    lags = np.arange(1, steps + 1, dtype=float) * float(dt)
+    if kernel == "Fractional / rough":
+        exponent = float(hurst) - 0.5
+        return np.power(lags, exponent) / math.gamma(float(hurst) + 0.5)
+    if kernel == "Exponential":
+        return np.exp(-float(decay) * lags)
+    if kernel == "Custom expression":
+        expression = (custom_expression or "").strip()
+        if not expression:
+            expression = "u**(H-0.5)/gamma(H+0.5)"
+        return volterra_custom_kernel_values(expression, lags, hurst, decay)
+    fractional = np.power(lags, float(hurst) - 0.5) / math.gamma(float(hurst) + 0.5)
+    exponential = np.exp(-float(decay) * lags)
+    return 0.65 * fractional + 0.35 * exponential
+
+
+def volterra_drift(x_values: np.ndarray, kappa: float, theta: float) -> np.ndarray:
+    return float(kappa) * (float(theta) - x_values)
+
+
+def volterra_diffusion(x_values: np.ndarray, vol: float, model: str) -> np.ndarray:
+    if model == "Constant sigma":
+        return np.full_like(x_values, float(vol), dtype=float)
+    if model == "Square-root safe":
+        return float(vol) * np.sqrt(np.maximum(x_values, 0.0) + 1e-8)
+    return float(vol) * np.exp(0.5 * np.clip(x_values, -8.0, 8.0))
+
+
+def simulate_volterra_paths(
+    *,
+    kernel: str,
+    model: str,
+    steps: int,
+    paths: int,
+    horizon: float,
+    x0: float,
+    kappa: float,
+    theta: float,
+    vol: float,
+    hurst: float,
+    decay: float,
+    custom_kernel_expression: str | None,
+    seed: int,
+) -> pd.DataFrame:
+    steps = int(max(2, steps))
+    paths = int(max(1, paths))
+    dt = float(horizon) / float(steps)
+    kernel_lags = volterra_kernel_values(kernel, dt, steps, hurst, decay, custom_kernel_expression)
+    rng = np.random.default_rng(int(seed))
+    rows: list[dict[str, float | int]] = []
+    time_grid = np.linspace(0.0, float(horizon), steps + 1)
+
+    for path_id in range(paths):
+        x = np.zeros(steps + 1, dtype=float)
+        x[0] = float(x0)
+        d_w = rng.normal(0.0, math.sqrt(dt), size=steps)
+        for n in range(1, steps + 1):
+            previous = x[:n]
+            lags = kernel_lags[n - 1 :: -1]
+            drift_terms = lags * volterra_drift(previous, kappa, theta) * dt
+            diffusion_terms = lags * volterra_diffusion(previous, vol, model) * d_w[:n]
+            x[n] = float(x0) + float(drift_terms.sum()) + float(diffusion_terms.sum())
+        for time_value, x_value in zip(time_grid, x):
+            rows.append({"path": path_id + 1, "time": time_value, "x": x_value})
+    return pd.DataFrame(rows)
+
+
+def volterra_kernel_chart(
+    kernel: str,
+    horizon: float,
+    steps: int,
+    hurst: float,
+    decay: float,
+    custom_kernel_expression: str | None,
+) -> go.Figure:
+    dt = float(horizon) / float(max(2, steps))
+    values = volterra_kernel_values(kernel, dt, int(max(2, steps)), hurst, decay, custom_kernel_expression)
+    times = np.arange(1, len(values) + 1, dtype=float) * dt
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=times,
+            y=values,
+            mode="lines",
+            line={"color": "#f2c14e", "width": 3.0},
+            name="K lag",
+            hovertemplate="lag %{x:.4f}<br>K %{y:.4f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="Lag t-s")
+    fig.update_yaxes(title="Kernel weight K(t-s)")
+    return apply_mc_chart_layout(fig, "Volterra Memory Kernel", height=360)
+
+
+def volterra_paths_chart(paths_frame: pd.DataFrame, max_paths: int = 12) -> go.Figure:
+    fig = go.Figure()
+    visible_paths = sorted(paths_frame["path"].unique())[: int(max_paths)]
+    for path_id in visible_paths:
+        path_frame = paths_frame[paths_frame["path"] == path_id]
+        fig.add_trace(
+            go.Scatter(
+                x=path_frame["time"],
+                y=path_frame["x"],
+                mode="lines",
+                line={"width": 1.7},
+                name=f"path {int(path_id)}",
+                opacity=0.78,
+                hovertemplate="t %{x:.3f}<br>X %{y:.4f}<extra></extra>",
+            )
+        )
+    mean_path = paths_frame.groupby("time", as_index=False)["x"].mean()
+    fig.add_trace(
+        go.Scatter(
+            x=mean_path["time"],
+            y=mean_path["x"],
+            mode="lines",
+            line={"color": "#ffffff", "width": 4.0},
+            name="mean path",
+            hovertemplate="t %{x:.3f}<br>mean X %{y:.4f}<extra></extra>",
+        )
+    )
+    fig.update_xaxes(title="time")
+    fig.update_yaxes(title="X(t)")
+    return apply_mc_chart_layout(fig, "Simulated Volterra Paths", height=470)
+
+
+def volterra_terminal_chart(paths_frame: pd.DataFrame) -> go.Figure:
+    final_time = float(paths_frame["time"].max())
+    terminal = paths_frame[np.isclose(paths_frame["time"], final_time)]["x"]
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(
+            x=terminal,
+            nbinsx=24,
+            marker_color="#6ccf9c",
+            name="terminal X",
+            hovertemplate="X %{x:.4f}<br>count %{y}<extra></extra>",
+        )
+    )
+    fig.add_vline(x=float(terminal.mean()), line={"color": "#e15759", "width": 2.6, "dash": "dash"})
+    fig.update_xaxes(title="X(T)")
+    fig.update_yaxes(title="count")
+    return apply_mc_chart_layout(fig, "Terminal Distribution", height=360)
+
+
+def volterra_summary_table(paths_frame: pd.DataFrame) -> pd.DataFrame:
+    final_time = float(paths_frame["time"].max())
+    terminal = paths_frame[np.isclose(paths_frame["time"], final_time)]["x"]
+    increments = paths_frame.sort_values(["path", "time"]).groupby("path")["x"].diff().dropna()
+    rows = [
+        {"Metric": "Mean X(T)", "Value": f"{float(terminal.mean()):.5f}"},
+        {"Metric": "Std X(T)", "Value": f"{float(terminal.std(ddof=1)):.5f}"},
+        {"Metric": "P05 X(T)", "Value": f"{float(terminal.quantile(0.05)):.5f}"},
+        {"Metric": "Median X(T)", "Value": f"{float(terminal.median()):.5f}"},
+        {"Metric": "P95 X(T)", "Value": f"{float(terminal.quantile(0.95)):.5f}"},
+        {"Metric": "Mean absolute step move", "Value": f"{float(increments.abs().mean()):.5f}"},
+    ]
+    return pd.DataFrame(rows)
+
+
+def render_volterra_tool_page() -> None:
+    st.markdown(
+        '<div class="mc-title">Volterra Process <span class="mc-chip">derivation + simulation</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    intro_left, intro_right = st.columns([1.1, 1.0], gap="medium")
+    with intro_left:
+        st.markdown(
+            r"""
+            <div class="mc-panel">
+              <div class="mc-section-title">Continuous-Time Object</div>
+              <div class="mc-note">
+                A Volterra process is like an SDE with memory. Instead of only reacting to the current Brownian shock, it remembers old shocks through a kernel <b>K(t-s)</b>. Recent shocks usually matter more; old shocks fade depending on the kernel.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.latex(r"X_t = X_0 + \int_0^t K(t-s)b(X_s)\,ds + \int_0^t K(t-s)\sigma(X_s)\,dW_s")
+        st.markdown(
+            r"""
+            <div class="mc-panel">
+              <div class="mc-section-title">Left-Point Discretization</div>
+              <div class="mc-note">
+                Put a grid <b>t_n=n\Delta t</b>. Approximate the deterministic integral with a Riemann sum and the stochastic integral with Brownian increments
+                <b>&Delta;W_j = W<sub>t_{j+1}</sub> - W<sub>t_j</sub></b>.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.latex(
+            r"X_n \approx X_0 + \sum_{j=0}^{n-1}K((n-j)\Delta t)b(X_j)\Delta t"
+            r" + \sum_{j=0}^{n-1}K((n-j)\Delta t)\sigma(X_j)\Delta W_j"
+        )
+    with intro_right:
+        st.markdown(
+            r"""
+            <div class="mc-panel">
+              <div class="mc-section-title">Simulation Recipe</div>
+              <div class="mc-note">
+                <b>1.</b> Choose a kernel K and grid size.<br>
+                <b>2.</b> Draw Brownian increments &Delta;W<sub>j</sub> ~ N(0,&Delta;t).<br>
+                <b>3.</b> For every time n, reuse all previous values X<sub>j</sub> with lag weights K((n-j)&Delta;t).<br>
+                <b>4.</b> Repeat for many paths and inspect the terminal distribution.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            r"""
+            <div class="mc-panel">
+              <div class="mc-section-title">Interpretation</div>
+              <div class="mc-note">
+                The only new ingredient versus a Markov SDE is the kernel. The drift and diffusion are still local in <b>X<sub>s</sub></b>, but their effect is filtered through memory weights before it reaches time <b>t</b>.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    spec_col, control_col = st.columns([1.05, 0.95], gap="medium")
+    with spec_col:
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Preset Kernel Library</div>
+              <div class="mc-note">
+                Use a preset if you want a standard Volterra memory shape, or switch to a custom expression if you want to prototype your own kernel directly.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        preset_a, preset_b, preset_c = st.columns(3, gap="small")
+        with preset_a:
+            st.markdown('<div class="mc-panel"><div class="mc-section-title">Fractional / rough</div></div>', unsafe_allow_html=True)
+            st.latex(r"K(u)=\frac{u^{H-\frac12}}{\Gamma(H+\frac12)}")
+        with preset_b:
+            st.markdown('<div class="mc-panel"><div class="mc-section-title">Exponential</div></div>', unsafe_allow_html=True)
+            st.latex(r"K(u)=e^{-\lambda u}")
+        with preset_c:
+            st.markdown('<div class="mc-panel"><div class="mc-section-title">Mixed</div></div>', unsafe_allow_html=True)
+            st.latex(r"K(u)=0.65\frac{u^{H-\frac12}}{\Gamma(H+\frac12)}+0.35e^{-\lambda u}")
+
+    chart_col = None
+    control_chart = st.columns([0.9, 2.0], gap="medium")
+    control_col, chart_col = control_chart
+    with control_col:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Model Specification</div>', unsafe_allow_html=True)
+        kernel = st.selectbox(
+            "Kernel",
+            ["Fractional / rough", "Exponential", "Mixed fractional + exponential", "Custom expression"],
+            index=0,
+            help="The kernel controls how strongly old shocks affect today's value.",
+        )
+        equation, interpretation = volterra_kernel_equation(kernel)
+        st.latex(equation)
+        st.caption(interpretation)
+        custom_kernel_expression = ""
+        if kernel == "Custom expression":
+            custom_kernel_expression = st.text_input(
+                "Custom kernel K(u)",
+                value="u**(H-0.5)/gamma(H+0.5)",
+                help="Allowed symbols: u, H, lambda_decay, lam, exp, sqrt, log, sin, cos, abs, minimum, maximum, clip, where, gamma, np.",
+            )
+            kernel_warning = st.session_state.get("volterra_custom_kernel_error", "")
+            if kernel_warning:
+                st.warning(kernel_warning)
+        model = st.selectbox(
+            "Diffusion model",
+            ["Constant sigma", "Square-root safe", "Lognormal safe"],
+            index=0,
+            help="Choose how sigma changes with X.",
+        )
+        steps = int(
+            p3_slider_with_number(
+                "Steps",
+                50.0,
+                600.0,
+                240.0,
+                10.0,
+                "volterra_steps",
+                "More steps are smoother but slower because the naive Volterra scheme is O(N^2).",
+            )
+        )
+        paths = int(
+            p3_slider_with_number(
+                "Paths",
+                5.0,
+                120.0,
+                40.0,
+                5.0,
+                "volterra_paths",
+                "Number of Monte Carlo paths.",
+            )
+        )
+        horizon = p3_slider_with_number("Horizon T", 0.25, 5.0, 1.0, 0.25, "volterra_horizon")
+        x0 = p3_slider_with_number("Initial X0", -2.0, 2.0, 0.0, 0.05, "volterra_x0")
+        kappa = p3_slider_with_number("Mean reversion kappa", 0.0, 8.0, 1.2, 0.1, "volterra_kappa")
+        theta = p3_slider_with_number("Long-run theta", -2.0, 2.0, 0.0, 0.05, "volterra_theta")
+        vol = p3_slider_with_number("Volatility nu", 0.0, 3.0, 0.6, 0.05, "volterra_vol")
+        hurst = p3_slider_with_number("Hurst H", 0.05, 0.95, 0.15, 0.01, "volterra_hurst")
+        decay = p3_slider_with_number("Exponential decay lambda", 0.0, 8.0, 1.5, 0.1, "volterra_decay")
+        seed = int(p3_slider_with_number("Random seed", 1.0, 9999.0, 42.0, 1.0, "volterra_seed"))
+        st.markdown(
+            """
+            <div class="mc-note">
+              Preset equations are shown above. For a custom kernel, enter an expression in <b>u</b> where <b>u=t-s</b>. Example:
+              <code>exp(-lambda_decay*u) * u**(H-0.5)</code>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    kernel_error = None
+    try:
+        paths_frame = simulate_volterra_paths(
+            kernel=kernel,
+            model=model,
+            steps=steps,
+            paths=paths,
+            horizon=horizon,
+            x0=x0,
+            kappa=kappa,
+            theta=theta,
+            vol=vol,
+            hurst=hurst,
+            decay=decay,
+            custom_kernel_expression=custom_kernel_expression,
+            seed=seed,
+        )
+    except Exception as exc:
+        kernel_error = str(exc)
+        paths_frame = simulate_volterra_paths(
+            kernel="Fractional / rough",
+            model=model,
+            steps=steps,
+            paths=paths,
+            horizon=horizon,
+            x0=x0,
+            kappa=kappa,
+            theta=theta,
+            vol=vol,
+            hurst=hurst,
+            decay=decay,
+            custom_kernel_expression="",
+            seed=seed,
+        )
+
+    with chart_col:
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Simulation Output</div>
+              <div class="mc-note">
+                This is the explicit Volterra convolution scheme: every new point reuses the whole past path with lag-dependent kernel weights. That is why the naive simulator is quadratic in the number of time steps.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if kernel_error:
+            st.warning(f"Custom kernel could not be evaluated, so I fell back to the fractional preset. Details: {kernel_error}")
+        st.plotly_chart(volterra_paths_chart(paths_frame), use_container_width=True, config={"displaylogo": False})
+        kernel_col, terminal_col = st.columns(2, gap="medium")
+        with kernel_col:
+            st.plotly_chart(
+                volterra_kernel_chart(kernel, horizon, steps, hurst, decay, custom_kernel_expression),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
+        with terminal_col:
+            st.plotly_chart(volterra_terminal_chart(paths_frame), use_container_width=True, config={"displaylogo": False})
+
+    table_left, table_right = st.columns([0.9, 1.2], gap="medium")
+    with table_left:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Simulation Summary</div>', unsafe_allow_html=True)
+        mc_table(volterra_summary_table(paths_frame))
+        st.markdown("</div>", unsafe_allow_html=True)
+    with table_right:
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Practical Reading Guide</div>
+              <div class="mc-note">
+                If <b>H</b> is small, the kernel spikes near zero and the paths get rougher. If <b>&lambda;</b> is large, old information dies fast. If <b>&kappa;</b> is large, the process snaps back to <b>&theta;</b>. A large <b>&nu;</b> widens the terminal distribution. The custom kernel box is useful when you want to test memory laws that are not exactly fractional or exponential.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_p3_suitcase_page() -> None:
+    st.markdown(
+        '<div class="mc-title">Prosperity 3 Round 4 <span class="mc-chip">suitcase game</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    default_r4_params = {
+        "p3_r4_nash_weight": 55.0,
+        "p3_r4_conc_nash_weight": 12.5,
+        "p3_r4_inverse_nash_weight": 5.0,
+        "p3_r4_random_weight": 15.0,
+        "p3_r4_nice_weight": 12.5,
+        "p3_r4_high_multiplier_weight": 0.0,
+        "p3_r4_conc_exponent": 1.6,
+    }
+    for key, value in default_r4_params.items():
+        st.session_state.setdefault(f"{key}_slider", float(value))
+        st.session_state.setdefault(f"{key}_number", float(value))
+
+    intro_left, intro_right = st.columns([1.2, 1.0], gap="medium")
+    with intro_left:
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">The Suitcase Game</div>
+              <div class="mc-note">
+                Round 4 is the larger version of the Round 2 container game: there are 20 suitcases instead of 10, you may open up to 3, the first is free, the second costs <b>50,000</b>, and the third costs <b>100,000</b>. Each suitcase still pays
+                <br><br><b>PnL = M<sub>f</sub> × 10,000 / (p<sub>f</sub> × 100 + I<sub>f</sub>)</b>
+                <br><br>where <b>M<sub>f</sub></b> is the multiplier, <b>I<sub>f</sub></b> the fixed inhabitants, and <b>p<sub>f</sub></b> the share of teams choosing that suitcase.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            """
+            <div class="mc-panel">
+              <div class="mc-section-title">Why Round 4 Is Different</div>
+              <div class="mc-note">
+                The payoff formula is the same as Round 2, but now we have <b>real behavioral evidence from Round 2</b>. So instead of guessing that humans are random, we can blend a few interpretable priors: mostly Nash, some crowding into already-popular picks, some over-correction into low-Nash suitcases, some randomness, and some nice-number bias.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with intro_right:
+        base = p3_r4_suitcase_base_frame()
+        nash_ev = float(base["nash_payoff"].mean())
+        second_suitcase_net = format(nash_ev - 50_000.0, "+,.0f")
+        third_suitcase_net = format(nash_ev - 100_000.0, "+,.0f")
+        mc_card("Nash EV", f"{nash_ev:,.0f}", "At equilibrium, all suitcases cluster near the same payoff.")
+        mc_card("Second suitcase", second_suitcase_net, "Average extra Nash EV minus the 50k opening cost.")
+        mc_card("Third suitcase", third_suitcase_net, "Average extra Nash EV minus the 100k third-suitcase cost.")
+
+    controls_col, charts_col = st.columns([1.0, 2.15], gap="medium")
+    with controls_col:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Calibrated Priors</div>', unsafe_allow_html=True)
+        p3_r4_nash_weight = p3_slider_with_number(
+            "Nash",
+            0.0,
+            100.0,
+            55.0,
+            0.5,
+            "p3_r4_nash_weight",
+            "Main rational-crowd prior from the equilibrium table.",
+        )
+        p3_r4_conc_nash_weight = p3_slider_with_number(
+            "Concentrated Nash",
+            0.0,
+            100.0,
+            12.5,
+            0.5,
+            "p3_r4_conc_nash_weight",
+            "Over-index on already-popular Nash favorites.",
+        )
+        p3_r4_inverse_nash_weight = p3_slider_with_number(
+            "Inverse Nash",
+            0.0,
+            100.0,
+            5.0,
+            0.5,
+            "p3_r4_inverse_nash_weight",
+            "Players who over-correct into the Nash under-owned tail.",
+        )
+        p3_r4_random_weight = p3_slider_with_number(
+            "Random",
+            0.0,
+            100.0,
+            15.0,
+            0.5,
+            "p3_r4_random_weight",
+            "Uniform unexplained first-order randomness.",
+        )
+        p3_r4_nice_weight = p3_slider_with_number(
+            "Nice numbers",
+            0.0,
+            100.0,
+            12.5,
+            0.5,
+            "p3_r4_nice_weight",
+            "Memorable multipliers with a 3/7-style pull.",
+        )
+        p3_r4_high_multiplier_weight = p3_slider_with_number(
+            "High multipliers",
+            0.0,
+            100.0,
+            0.0,
+            0.5,
+            "p3_r4_high_multiplier_weight",
+            "Optional greed tilt toward the biggest raw multipliers.",
+        )
+        p3_r4_conc_exponent = p3_slider_with_number(
+            "Concentrated Nash exponent",
+            0.5,
+            4.0,
+            1.6,
+            0.1,
+            "p3_r4_conc_exponent",
+            "Higher values pile more mass into the already-crowded Nash leaders.",
+        )
+        p3_r4_model = p3_r4_modeled_frame(
+            p3_r4_nash_weight,
+            p3_r4_conc_nash_weight,
+            p3_r4_inverse_nash_weight,
+            p3_r4_random_weight,
+            p3_r4_nice_weight,
+            p3_r4_high_multiplier_weight,
+            p3_r4_conc_exponent,
+        )
+        st.caption("The weights are normalized to 100% internally, so you can think in rough shares rather than exact totals.")
+        best_single = p3_r4_combo_frame(p3_r4_model, 1).iloc[0]
+        best_pair = p3_r4_combo_frame(p3_r4_model, 2).iloc[0]
+        best_triple = p3_r4_combo_frame(p3_r4_model, 3).iloc[0]
+        mc_card("Best single", str(best_single["Suitcases"]), f"Pred net {best_single['Pred net']:,.0f}")
+        mc_card("Best pair", str(best_pair["Suitcases"]), f"Pred net {best_pair['Pred net']:,.0f}")
+        mc_card("Best triple", str(best_triple["Suitcases"]), f"Pred net {best_triple['Pred net']:,.0f}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Strategy Logic</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_strategy_prior_table(p3_r4_model))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with charts_col:
+        st.plotly_chart(
+            p3_r4_strategy_distribution_chart(p3_r4_model),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+        top_left, top_right = st.columns([1.1, 1.0], gap="medium")
+        with top_left:
+            st.markdown('<div class="mc-panel"><div class="mc-section-title">Nash Equilibrium Table</div>', unsafe_allow_html=True)
+            mc_table(p3_r4_suitcase_table(p3_r4_model))
+            st.markdown("</div>", unsafe_allow_html=True)
+        with top_right:
+            st.markdown('<div class="mc-panel"><div class="mc-section-title">Strategy Distributions By Suitcase</div>', unsafe_allow_html=True)
+            mc_table(p3_r4_component_table(p3_r4_model))
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.plotly_chart(
+        p3_r4_payoff_chart(p3_r4_model),
+        use_container_width=True,
+        config={"displaylogo": False},
+    )
+
+    combo_left, combo_mid, combo_right = st.columns(3, gap="medium")
+    with combo_left:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Best 1-Pick Ideas</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_combo_display_table(p3_r4_model, 1, limit=10))
+        st.markdown("</div>", unsafe_allow_html=True)
+    with combo_mid:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Best 2-Pick Ideas</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_combo_display_table(p3_r4_model, 2, limit=12))
+        st.markdown("</div>", unsafe_allow_html=True)
+    with combo_right:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Best 3-Pick Ideas</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_combo_display_table(p3_r4_model, 3, limit=12))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="mc-title">Manual R4 Notebook Results <span class="mc-chip">recomputed</span></div>',
+        unsafe_allow_html=True,
+    )
+    notebook_frame = p3_r4_notebook_results_frame()
+    notebook_single = p3_r4_notebook_combo_frame(notebook_frame, 1).iloc[0]
+    notebook_pair = p3_r4_notebook_combo_frame(notebook_frame, 2).iloc[0]
+    notebook_triple = p3_r4_notebook_combo_frame(notebook_frame, 3).iloc[0]
+    result_a, result_b, result_c, result_d = st.columns(4, gap="medium")
+    with result_a:
+        mc_card(
+            "Notebook best single",
+            str(notebook_single["Suitcases"]),
+            f"Net {notebook_single['Notebook net']:,.0f} XIRECs",
+        )
+    with result_b:
+        mc_card(
+            "Notebook best pair",
+            str(notebook_pair["Suitcases"]),
+            f"Net {notebook_pair['Notebook net']:,.0f} XIRECs",
+        )
+    with result_c:
+        mc_card(
+            "Notebook best triple",
+            str(notebook_triple["Suitcases"]),
+            f"Net {notebook_triple['Notebook net']:,.0f} XIRECs",
+        )
+    with result_d:
+        recommended = notebook_pair if notebook_pair["Notebook net"] >= notebook_single["Notebook net"] else notebook_single
+        mc_card(
+            "Notebook recommendation",
+            str(recommended["Suitcases"]),
+            "Third suitcase is not worth the 100k extra fee under this prior.",
+        )
+
+    st.markdown(
+        """
+        <div class="mc-panel">
+          <div class="mc-section-title">What This Notebook Result Means</div>
+          <div class="mc-note">
+            The notebook fits a simple linear crowd model from earlier behavior:
+            predicted crowd share depends only on the suitcase multiplier and fixed inhabitants. I recompute its outputs here in official XIREC units, then rank every 1, 2, and 3 suitcase choice after opening costs.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    notebook_chart_left, notebook_chart_right = st.columns(2, gap="medium")
+    with notebook_chart_left:
+        st.plotly_chart(
+            p3_r4_notebook_density_chart(notebook_frame),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+    with notebook_chart_right:
+        st.plotly_chart(
+            p3_r4_notebook_payoff_chart(notebook_frame),
+            use_container_width=True,
+            config={"displaylogo": False},
+        )
+
+    notebook_table_left, notebook_table_right = st.columns([1.35, 1.0], gap="medium")
+    with notebook_table_left:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Notebook Predicted Suitcase Results</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_notebook_suitcase_table(notebook_frame))
+        st.markdown("</div>", unsafe_allow_html=True)
+    with notebook_table_right:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Notebook Model Checks</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_notebook_accuracy_table())
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    notebook_combo_left, notebook_combo_mid, notebook_combo_right = st.columns(3, gap="medium")
+    with notebook_combo_left:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Notebook Best 1-Pick</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_notebook_combo_display_table(notebook_frame, 1, limit=8))
+        st.markdown("</div>", unsafe_allow_html=True)
+    with notebook_combo_mid:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Notebook Best 2-Pick</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_notebook_combo_display_table(notebook_frame, 2, limit=10))
+        st.markdown("</div>", unsafe_allow_html=True)
+    with notebook_combo_right:
+        st.markdown('<div class="mc-panel"><div class="mc-section-title">Notebook Best 3-Pick</div>', unsafe_allow_html=True)
+        mc_table(p3_r4_notebook_combo_display_table(notebook_frame, 3, limit=10))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
 def rerun() -> None:
     if hasattr(st, "rerun"):
         st.rerun()
@@ -2891,9 +8293,72 @@ def rerun() -> None:
         st.experimental_rerun()
 
 
+def sidebar_round_selector() -> str:
+    st.session_state.setdefault("active_round_page", "p4_r3" if ROUND3_DATA_DIR.exists() else "p4_r2")
+    pages = {
+        "p4_r1": "Round 1",
+        "p4_r2": "Round 2",
+        "p4_r3": "Round 3",
+        "p3_r1": "Round 1",
+        "p3_r2": "Round 2",
+        "p3_r3": "Round 3",
+        "p3_r4": "Round 4",
+    }
+    if st.session_state["active_round_page"] not in pages:
+        st.session_state["active_round_page"] = "p4_r3" if ROUND3_DATA_DIR.exists() else "p4_r2"
+
+    def nav_button(page_key: str) -> None:
+        active = st.session_state["active_round_page"] == page_key
+        label = pages[page_key]
+        if st.sidebar.button(label, key=f"nav_{page_key}", type="primary" if active else "secondary", use_container_width=True):
+            st.session_state["active_round_page"] = page_key
+
+    st.sidebar.markdown("### Prosperity 4")
+    nav_button("p4_r1")
+    nav_button("p4_r2")
+    nav_button("p4_r3")
+    st.sidebar.markdown("<hr style='margin:1rem 0;border:0;border-top:1px solid rgba(160,166,178,0.35);'>", unsafe_allow_html=True)
+    st.sidebar.markdown("### Prosperity 3")
+    nav_button("p3_r1")
+    nav_button("p3_r2")
+    nav_button("p3_r3")
+    nav_button("p3_r4")
+    return st.session_state["active_round_page"]
+
+
+def render_empty_p3_round(round_number: int) -> None:
+    st.markdown(
+        f'<div class="mc-title">Prosperity 3 Round {round_number} <span class="mc-chip">empty</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="mc-panel">
+          <div class="mc-section-title">Nothing here yet</div>
+          <div class="mc-note">This page is reserved for previous-year analysis. Round 2 has the manual container-game model so far.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main() -> None:
     st.set_page_config(page_title="Prosperity Order Book Visualizer", layout="wide")
     install_style()
+
+    page = sidebar_round_selector()
+    if page == "p3_r2":
+        render_p3_container_page()
+        return
+    if page == "p3_r3":
+        render_p3_reserve_price_page()
+        return
+    if page == "p3_r4":
+        render_p3_suitcase_page()
+        return
+    if page.startswith("p3_"):
+        render_empty_p3_round(int(page[-1]))
+        return
 
     available_datasets = [
         label
@@ -2901,15 +8366,18 @@ def main() -> None:
         if discover_dataset_files(tuple(str(path) for path in folder_paths)).price_paths
     ]
     if not available_datasets:
-        st.error("No price CSVs found in the configured Round 1 or Round 2 folders.")
+        st.error("No price CSVs found in the configured Prosperity 4 round folders.")
         return
 
-    default_dataset = "Round 2" if "Round 2" in available_datasets else available_datasets[-1]
-    selected_dataset_label = st.sidebar.selectbox(
-        "Dataset",
-        available_datasets,
-        index=available_datasets.index(default_dataset),
-    )
+    if page == "p4_r1":
+        selected_dataset_label = "Round 1"
+    elif page == "p4_r2":
+        selected_dataset_label = "Round 2"
+    else:
+        selected_dataset_label = "Round 3"
+    if selected_dataset_label not in available_datasets:
+        st.error(f"No CSV files found for {selected_dataset_label}.")
+        return
     folder_paths = tuple(str(path) for path in DATASET_DIRS[selected_dataset_label])
     folder = ", ".join(folder_paths)
     files = discover_dataset_files(folder_paths)
@@ -3131,7 +8599,7 @@ def main() -> None:
             submission_upload = st.file_uploader(
                 "Upload .py submission",
                 type=["py"],
-                key="submission_backtest_upload",
+                key=f"submission_backtest_upload_{selected_dataset_label}",
             )
             submission_key = None
             submission_code = (
@@ -3154,14 +8622,19 @@ def main() -> None:
                     "Submit / Run Backtest",
                     type="primary",
                     use_container_width=True,
-                    key="submission_submit_button",
+                    key=f"submission_submit_button_{selected_dataset_label}",
                 ):
                     st.session_state["submitted_submission_key"] = submission_key
                     st.session_state["submitted_submission_name"] = submission_upload.name
                     st.session_state["submitted_submission_code"] = submission_code
                     st.session_state["submitted_pnl_basis_label"] = pnl_basis_label
+                    st.session_state["submitted_submission_event_id"] = str(time.time_ns())
+                    st.session_state["submitted_submission_source"] = "upload"
+                    st.rerun()
                 if st.session_state.get("submitted_submission_key") != submission_key:
                     st.caption("Click Submit / Run Backtest when you want to run this file.")
+                else:
+                    st.success("Submission loaded. Backtest results are shown below.")
 
     low_qty, high_qty = trade_qty_range
     if not show_small_takers:
@@ -3200,6 +8673,195 @@ def main() -> None:
             config={"scrollZoom": True, "displaylogo": False},
         )
 
+        if selected_dataset_label == "Round 3":
+            p4_r3_analysis = build_p4_r3_option_analysis(int(plot_day))
+            p4_r3_options = p4_r3_analysis["options"]
+            p4_r3_scatter = p4_r3_analysis["scatter"]
+            p4_r3_coeffs = p4_r3_analysis["coeffs"]
+            p4_r3_strike_table = p4_r3_analysis["strike_table"]
+            if isinstance(p4_r3_options, pd.DataFrame) and not p4_r3_options.empty:
+                st.markdown(
+                    """
+                    <div class="mc-panel">
+                      <div class="mc-section-title">Round 3 Option Smile: Quadratic Fit + Detrending</div>
+                      <div class="mc-note">
+                        We infer market implied volatility for every <b>VEV strike</b>, fit a parabola in <b>log-moneyness</b>, and then subtract that fitted smile from observed IV. That removes the structural strike curvature and leaves the <b>relative mispricing residual</b> — the part that is actually interesting for cross-strike trading.
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                smile_left, smile_right = st.columns([1.2, 1.0], gap="medium")
+                with smile_left:
+                    st.plotly_chart(
+                        p4_r3_smile_fit_chart(
+                            p4_r3_scatter,
+                            p4_r3_options,
+                            np.asarray(p4_r3_coeffs, dtype=float),
+                            int(focus_timestamp),
+                        ),
+                        use_container_width=True,
+                        config={"displaylogo": False},
+                    )
+                with smile_right:
+                    coeffs = np.asarray(p4_r3_coeffs, dtype=float)
+                    mc_card(
+                        "Quadratic smile fit",
+                        f"{coeffs[0]:.4f} m^2 + {coeffs[1]:.4f} m + {coeffs[2]:.4f}",
+                        "m = log(K / S), fit on observed voucher IVs for the selected day",
+                    )
+                    st.plotly_chart(
+                        p4_r3_snapshot_residual_chart(p4_r3_options, int(focus_timestamp)),
+                        use_container_width=True,
+                        config={"displaylogo": False},
+                    )
+
+                residual_left, residual_right = st.columns([1.25, 0.95], gap="medium")
+                with residual_left:
+                    st.plotly_chart(
+                        p4_r3_iv_residual_chart(p4_r3_options),
+                        use_container_width=True,
+                        config={"displaylogo": False},
+                    )
+                with residual_right:
+                    strike_table = p4_r3_strike_table.copy()
+                    if not strike_table.empty:
+                        strike_table = strike_table.rename(
+                            columns={
+                                "product": "Voucher",
+                                "strike": "Strike",
+                                "mean_iv": "Mean IV",
+                                "mean_smile_iv": "Smile IV",
+                                "mean_residual": "Mean residual",
+                                "residual_std": "Residual std",
+                                "mean_price": "Mean price",
+                            }
+                        )
+                        for column in ["Mean IV", "Smile IV", "Mean residual", "Residual std", "Mean price"]:
+                            strike_table[column] = strike_table[column].map(
+                                lambda value: f"{float(value):.4f}" if pd.notna(value) else ""
+                            )
+                    st.markdown('<div class="mc-panel"><div class="mc-section-title">Per-Strike Smile Diagnostics</div>', unsafe_allow_html=True)
+                    mc_table(strike_table)
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                delta1_diag = build_p4_r3_delta1_diagnostics(int(plot_day))
+                if delta1_diag:
+                    st.markdown(
+                        """
+                        <div class="mc-panel">
+                          <div class="mc-section-title">Hydrogel vs Velvetfruit Diagnostics</div>
+                          <div class="mc-note">
+                            These panels test whether the two delta-1 products exhibit standalone mean reversion, whether they share a stable equilibrium spread, and whether one product tends to move first while the other follows.
+                          </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    diag_cards = st.columns(3)
+                    coint_info = delta1_diag["cointegration"]
+                    with diag_cards[0]:
+                        mc_card(
+                            "Cointegration p-value",
+                            f"{coint_info['p_value']:.6f}",
+                            f"t-stat {coint_info['t_stat']:.3f} | 5% crit {coint_info['crit_5']:.3f}",
+                        )
+                    with diag_cards[1]:
+                        mc_card(
+                            "Static beta",
+                            f"{coint_info['beta']:.4f}",
+                            "Log-price hedge ratio: Velvet regressed on Hydrogel",
+                        )
+                    with diag_cards[2]:
+                        strongest = delta1_diag["lead_lag_frame"].iloc[
+                            delta1_diag["lead_lag_frame"]["corr"].abs().idxmax()
+                        ]
+                        mc_card(
+                            "Strongest lead-lag",
+                            f"{strongest['corr']:.4f}",
+                            f"{strongest['pair']} at lag {int(strongest['lag'])}",
+                        )
+
+                    delta_left, delta_right = st.columns([1.25, 0.95], gap="medium")
+                    with delta_left:
+                        st.plotly_chart(
+                            p4_r3_rolling_autocorr_chart(delta1_diag["autocorr_frame"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                        st.plotly_chart(
+                            p4_r3_rolling_beta_spread_chart(delta1_diag["wide"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                    with delta_right:
+                        st.plotly_chart(
+                            p4_r3_lead_lag_heatmap(delta1_diag["lead_lag_frame"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                        st.plotly_chart(
+                            p4_r3_delta1_signal_chart(delta1_diag["signal_frame"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                        st.plotly_chart(
+                            p4_r3_depth_regime_chart(delta1_diag["regime_frame"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                        st.markdown('<div class="mc-panel"><div class="mc-section-title">Diagnostic Summary</div>', unsafe_allow_html=True)
+                        mc_table(delta1_diag["summary"])
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                option_micro = build_p4_r3_option_microstructure_diagnostics(int(plot_day))
+                if option_micro:
+                    st.markdown(
+                        """
+                        <div class="mc-panel">
+                          <div class="mc-section-title">Voucher Relative-Value and Bot-Template Diagnostics</div>
+                          <div class="mc-note">
+                            Here we test whether smile-detrended option residuals actually mean-revert in price space, whether the underlying leads the vouchers, and whether the ten strikes are being quoted by what looks like one synchronized template bot rather than ten independent books.
+                          </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    micro_left, micro_right = st.columns([1.15, 1.0], gap="medium")
+                    with micro_left:
+                        st.plotly_chart(
+                            p4_r3_option_residual_signal_chart(option_micro["residual_signal"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                        st.plotly_chart(
+                            p4_r3_underlying_option_lag_chart(option_micro["under_option_lag"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                    with micro_right:
+                        st.plotly_chart(
+                            p4_r3_voucher_sync_chart(option_micro["sync_frame"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                        st.plotly_chart(
+                            p4_r3_voucher_corr_heatmap(option_micro["imbalance_corr"]),
+                            use_container_width=True,
+                            config={"displaylogo": False},
+                        )
+                        st.markdown('<div class="mc-panel"><div class="mc-section-title">Bot-Template Summary</div>', unsafe_allow_html=True)
+                        mc_table(option_micro["bot_summary"])
+                        st.markdown("</div>", unsafe_allow_html=True)
+                        template_table = option_micro["template_table"].copy()
+                        if not template_table.empty:
+                            template_table["Share"] = template_table["Share"].map(lambda value: f"{float(value):.2%}")
+                        st.markdown('<div class="mc-panel"><div class="mc-section-title">Most Common L1 Size Templates</div>', unsafe_allow_html=True)
+                        mc_table(template_table)
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                render_p4_r3_manual_bid_panel()
+
         st.plotly_chart(
             small_line_chart(product_prices, ["profit_and_loss"], "2  PnL Panel", focus_timestamp),
             use_container_width=True,
@@ -3235,9 +8897,96 @@ def main() -> None:
                     st.code("\n".join(lines[:18]) or "No matching log lines.")
 
         submitted_key = st.session_state.get("submitted_submission_key")
-        if submission_upload is not None and submitted_key == submission_key:
-            submitted_name = st.session_state.get("submitted_submission_name", submission_upload.name)
-            submitted_code = st.session_state.get("submitted_submission_code", submission_code)
+        submitted_name = st.session_state.get("submitted_submission_name")
+        submitted_code = st.session_state.get("submitted_submission_code")
+        active_submission_ready = bool(submitted_key and submitted_name and submitted_code)
+        basis_label = st.session_state.get(
+            "submission_pnl_basis",
+            st.session_state.get("submitted_pnl_basis_label", "100,000 ticks"),
+        )
+        normalization_ticks = 1_000_000 if "1,000,000" in str(basis_label) else 100_000
+        history_all = submission_history_dataframe(normalization_ticks)
+        history_dataset = submission_history_dataframe(normalization_ticks, selected_dataset_label)
+
+        if not history_all.empty:
+            best_overall = history_all.iloc[0]
+            history_left, history_mid, history_right = st.columns([1, 1, 1], gap="small")
+            with history_left:
+                mc_card(
+                    f"Best PnL So Far / {normalization_ticks:,} ticks",
+                    fmt_money(best_overall["Total PnL"], 0),
+                    f"{best_overall['File']} · {best_overall['Dataset']}",
+                )
+            with history_mid:
+                if not history_dataset.empty:
+                    best_dataset = history_dataset.iloc[0]
+                    mc_card(
+                        f"Best {selected_dataset_label} Run",
+                        fmt_money(best_dataset["Total PnL"], 0),
+                        f"{best_dataset['File']} · {best_dataset['When']}",
+                    )
+                else:
+                    mc_card(
+                        f"Best {selected_dataset_label} Run",
+                        "-",
+                        "No saved runs yet for this dataset/basis.",
+                    )
+            with history_right:
+                mc_card(
+                    "Saved Submissions",
+                    f"{len(history_all):,}",
+                    "Code snapshots are stored locally and ranked by total PnL.",
+                )
+            with st.expander("Submission history and saved code snapshots", expanded=not active_submission_ready):
+                history_view = history_all.copy()
+                history_view["Total PnL"] = history_view["Total PnL"].map(lambda value: fmt_money(value, 0))
+                history_view["Mean PnL"] = history_view["Mean PnL"].map(lambda value: fmt_money(value, 0))
+                history_view["1σ"] = history_view["1σ"].map(lambda value: fmt_money(value, 0))
+                st.dataframe(history_view, width="stretch", hide_index=True, height=260)
+                restore_options = [
+                    f"{row['When']} | {row['File']} | {fmt_money(row['Total PnL'], 0)}"
+                    for _, row in history_all.iterrows()
+                ]
+                selected_restore_label = st.selectbox(
+                    "Restore a saved submission",
+                    restore_options,
+                    key=f"restore_submission_{selected_dataset_label}_{normalization_ticks}",
+                )
+                selected_restore_idx = restore_options.index(selected_restore_label)
+                selected_restore_row = history_all.iloc[selected_restore_idx]
+                restore_cols = st.columns([1, 1], gap="small")
+                with restore_cols[0]:
+                    if st.button(
+                        "Load selected submission",
+                        use_container_width=True,
+                        key=f"restore_submission_button_{selected_dataset_label}_{normalization_ticks}",
+                    ):
+                        try:
+                            restored_code = Path(str(selected_restore_row["Code path"])).read_text()
+                        except Exception as exc:
+                            st.error(f"Could not restore saved code: {exc}")
+                        else:
+                            st.session_state["submitted_submission_key"] = f"restored:{selected_restore_row['Hash']}"
+                            st.session_state["submitted_submission_name"] = str(selected_restore_row["File"])
+                            st.session_state["submitted_submission_code"] = restored_code
+                            st.session_state["submitted_submission_event_id"] = str(time.time_ns())
+                            st.session_state["submitted_submission_source"] = "history"
+                            st.rerun()
+                with restore_cols[1]:
+                    code_path = str(selected_restore_row["Code path"])
+                    st.caption(f"Snapshot: `{Path(code_path).name}`")
+                family_board = submission_family_leaderboard(history_all)
+                if not family_board.empty:
+                    family_view = family_board.copy()
+                    family_view["Best_PnL"] = family_view["Best_PnL"].map(lambda value: fmt_money(value, 0))
+                    family_view["Mean_PnL"] = family_view["Mean_PnL"].map(lambda value: fmt_money(value, 0))
+                    st.markdown("**Leaderboard by strategy family / filename prefix**")
+                    st.dataframe(family_view, width="stretch", hide_index=True, height=220)
+
+        elif not active_submission_ready:
+            st.info("No active submission loaded yet. Saved PnL history will appear here once you backtest something from this dashboard.")
+
+        if active_submission_ready:
             st.markdown(
                 f'<div class="mc-title">{selected_dataset_label} Backtester <span class="mc-chip">upload-only</span></div>',
                 unsafe_allow_html=True,
@@ -3255,11 +9004,6 @@ def main() -> None:
             else:
                 maf_bid = daily_report.attrs.get("maf_bid")
                 backtest_warnings = daily_report.attrs.get("warnings", ())
-                basis_label = st.session_state.get(
-                    "submission_pnl_basis",
-                    st.session_state.get("submitted_pnl_basis_label", "100,000 ticks"),
-                )
-                normalization_ticks = 1_000_000 if "1,000,000" in str(basis_label) else 100_000
                 normalized_daily_report = normalize_daily_report(daily_report, normalization_ticks)
                 normalized_product_report = normalize_product_report(
                     product_report,
@@ -3288,6 +9032,18 @@ def main() -> None:
                 own_trades = int(pd.to_numeric(daily_report["OWN_TRADES"], errors="coerce").sum())
                 ticks = int(pd.to_numeric(daily_report["TICKS"], errors="coerce").sum())
                 snapshots = int(pd.to_numeric(daily_report.get("SNAPSHOTS", pd.Series(dtype=float)), errors="coerce").sum())
+                record_submission_history(
+                    event_id=str(st.session_state.get("submitted_submission_event_id", "")),
+                    submitted_name=submitted_name,
+                    submitted_code=submitted_code,
+                    dataset_label=selected_dataset_label,
+                    normalization_ticks=normalization_ticks,
+                    total_pnl=total_sum,
+                    mean_pnl=total_mean,
+                    sd_pnl=total_sd,
+                    own_trades=own_trades,
+                    day_count=len(daily_report),
+                )
                 maf_chip = (
                     f'<span class="mc-chip">MAF bid {int(maf_bid):,}</span>'
                     if maf_bid is not None
@@ -3684,6 +9440,76 @@ def main() -> None:
                 )
             st.plotly_chart(
                     speed_mu_pnl_chart(normal_speed_pct, speed_mu, speed_sd),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
+
+        st.markdown('<div class="mc-title">Actual 2026 Speed Field <span class="mc-chip">empirical crowd</span></div>', unsafe_allow_html=True)
+        actual_speed_pct = st.slider(
+            "Your Speed % under actual human data",
+            0.0,
+            100.0,
+            46.0,
+            step=1.0,
+            key="manual_actual_speed_pct",
+        )
+        actual_speed = empirical_speed_stats(actual_speed_pct)
+        actual_remaining = max(0.0, 100.0 - actual_speed_pct)
+        actual_research, actual_scale, actual_edge = optimal_research_scale_split(actual_remaining)
+        actual_gross_below = actual_edge * actual_speed["multiplier_below"]
+        actual_pnl_below = actual_gross_below - investment_budget_used(
+            actual_research,
+            actual_scale,
+            actual_speed_pct,
+        )
+        actual_ratio = actual_scale / actual_research if actual_research > 0 else float("inf")
+
+        actual_full_left, actual_full_right = st.columns([0.95, 1.55], gap="medium")
+        with actual_full_left:
+            mc_big_result(
+                "PnL from actual speed crowd",
+                fmt_money(actual_pnl_below, 0),
+                (
+                    f"Speed {actual_speed['speed_int']:.0f}% was above "
+                    f"{100 * actual_speed['pct_below']:.1f}% of real players "
+                    f"in the finished Round 2 manual data."
+                ),
+            )
+            actual_metrics_top = st.columns(2, gap="small")
+            with actual_metrics_top[0]:
+                mc_card(
+                    "Exact crowd at this speed",
+                    f"{int(actual_speed['count'])}",
+                    f"{100 * actual_speed['pct_exact']:.2f}% of {int(actual_speed['field_size'])} submissions.",
+                )
+            with actual_metrics_top[1]:
+                mc_card(
+                    "Empirical percentile",
+                    f"{100 * actual_speed['pct_below']:.1f}%",
+                    f"At or below: {100 * actual_speed['pct_at_or_below']:.1f}%",
+                )
+            actual_metrics_bottom = st.columns(2, gap="small")
+            with actual_metrics_bottom[0]:
+                mc_card(
+                    "Implied speed multiplier",
+                    f"{actual_speed['multiplier_below']:.3f}",
+                    "Uses the exact finished crowd, not a normal approximation.",
+                )
+            with actual_metrics_bottom[1]:
+                mc_card(
+                    "Optimal R/S and PnL",
+                    f"R {actual_research:.1f}% · S {actual_scale:.1f}%",
+                    f"S:R {actual_ratio:.2f}:1 · PnL {fmt_money(actual_pnl_below, 0)}",
+                )
+            st.caption("Percentile here means strictly below your chosen speed. So if many people tied at your speed, they are not counted as beaten.")
+        with actual_full_right:
+            st.plotly_chart(
+                empirical_speed_percentile_chart(actual_speed_pct),
+                use_container_width=True,
+                config={"displaylogo": False},
+            )
+            st.plotly_chart(
+                empirical_speed_pnl_chart(actual_speed_pct),
                 use_container_width=True,
                 config={"displaylogo": False},
             )
